@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 💬 优化
+
+- 已写入可信大小（≥ 1 MiB）的条目不再重复解析：全量探测也不会再读 `.strm` 或请求流地址，只有大小仍是 `.strm` 文本文件长度的条目才进入补全流程。
+- `.strm` 被替换后库扫描会把大小重置为新的文本文件长度，条目会自动重新进入补全，无需手动干预。
+
 ---
 
 ## [3.5.0] - 2026-11-09

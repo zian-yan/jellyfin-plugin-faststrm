@@ -239,9 +239,21 @@ public sealed class RemoteSizeService : IDisposable
     /// Resolves the remote size of the item's .strm target and persists it.
     /// Returns the size on success, or null when it could not be determined.
     /// </summary>
+    /// <remarks>
+    /// An item that already carries a plausible remote size is not resolved again: no .strm read
+    /// and no request to the stream endpoint. This matters for full-library probes, which visit
+    /// every item. If the .strm file is replaced, the next library scan resets
+    /// <see cref="BaseItem.Size"/> to the length of the new text file, so the item falls back
+    /// under <see cref="NeedsRemoteSize"/> and is resolved again automatically.
+    /// </remarks>
     public async Task<long?> ResolveAsync(BaseItem item, CancellationToken cancellationToken)
     {
         if (!Enabled || !IsStrmItem(item))
+        {
+            return null;
+        }
+
+        if (!NeedsRemoteSize(item))
         {
             return null;
         }
