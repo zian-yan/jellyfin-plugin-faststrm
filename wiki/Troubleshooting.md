@@ -57,6 +57,8 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 3. 若长期 504，多半是本机到 GitHub 的链路问题，可给 Jellyfin 容器配置代理后再试。
 
 > 判断包是否完好：`FastSTRM.zip` 的 md5 应与 `manifest.json` 里该版本的 `checksum` 一致。不一致才是包的问题，504 不是。
+>
+> 资产被重新发布过时 `checksum` 会变。若安装报 **校验和不匹配（checksum mismatch）**，说明 Jellyfin 缓存的是旧版插件目录数据：在 **控制台 → 插件 → 目录** 点「刷新」（或重启 Jellyfin）后再装一次即可。
 
 ---
 
