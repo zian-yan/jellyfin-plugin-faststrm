@@ -865,6 +865,11 @@ public sealed class ProbeService : IHostedService, IDisposable
             // and would otherwise block StopProbe and this task's own finally block.
             var sizeOnly = string.Equals(mode, SizeOnlyMode, StringComparison.OrdinalIgnoreCase);
 
+            // Full mode is a complete refresh: every field is replaced with freshly probed data,
+            // so the remote size is re-resolved even when a plausible one is already stored.
+            var forceRemoteSize = !sizeOnly
+                                  && string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase);
+
             var items = GetStrmItems();
             if (sizeOnly)
             {
@@ -913,7 +918,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     }
                     else
                     {
-                        await ProbeItemAsync(item, token).ConfigureAwait(false);
+                        await ProbeItemAsync(item, token, forceRemoteSize).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
@@ -1009,7 +1014,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         gate.Release();
     }
 
-    private async Task ProbeItemAsync(BaseItem item, CancellationToken ct)
+    private async Task ProbeItemAsync(BaseItem item, CancellationToken ct, bool forceRemoteSize = false)
     {
         await item.RefreshMetadata(
             new MetadataRefreshOptions(_directoryService)
@@ -1021,18 +1026,25 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         // The official probe measures the .strm container, so the size it stores is the size of
         // the local text file. Replace it with the real remote size after the refresh.
-        await FillRemoteSizeAsync(item, ct).ConfigureAwait(false);
+        await FillRemoteSizeAsync(item, ct, forceRemoteSize).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Resolves and stores the real (remote) size of the item's .strm target.
     /// Never throws: a failing size lookup must not fail the surrounding probe.
     /// </summary>
-    private async Task FillRemoteSizeAsync(BaseItem item, CancellationToken ct)
+    /// <param name="item">The .strm item.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="force">
+    /// Re-resolve and overwrite an already plausible size (used by the full-library probe, which
+    /// replaces every field). Other paths pass <c>false</c> so a resolved item is never asked
+    /// twice.
+    /// </param>
+    private async Task FillRemoteSizeAsync(BaseItem item, CancellationToken ct, bool force = false)
     {
         try
         {
-            await _remoteSize.ResolveAsync(item, ct).ConfigureAwait(false);
+            await _remoteSize.ResolveAsync(item, ct, force).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

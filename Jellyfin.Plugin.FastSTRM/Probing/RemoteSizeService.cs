@@ -239,21 +239,28 @@ public sealed class RemoteSizeService : IDisposable
     /// Resolves the remote size of the item's .strm target and persists it.
     /// Returns the size on success, or null when it could not be determined.
     /// </summary>
+    /// <param name="item">The .strm item.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="force">
+    /// Re-resolve and overwrite even when the stored size already looks plausible. Set by the
+    /// full-library probe, whose contract is to replace every field with fresh data. All other
+    /// entry points pass <c>false</c>, so an item that already has a real size is never resolved
+    /// twice — no .strm read and no request to the stream endpoint.
+    /// </param>
     /// <remarks>
-    /// An item that already carries a plausible remote size is not resolved again: no .strm read
-    /// and no request to the stream endpoint. This matters for full-library probes, which visit
-    /// every item. If the .strm file is replaced, the next library scan resets
-    /// <see cref="BaseItem.Size"/> to the length of the new text file, so the item falls back
-    /// under <see cref="NeedsRemoteSize"/> and is resolved again automatically.
+    /// When the .strm file is replaced, the next library scan resets <see cref="BaseItem.Size"/>
+    /// to the length of the new text file, so the item falls back under
+    /// <see cref="NeedsRemoteSize"/> and is resolved again automatically even without
+    /// <paramref name="force"/>.
     /// </remarks>
-    public async Task<long?> ResolveAsync(BaseItem item, CancellationToken cancellationToken)
+    public async Task<long?> ResolveAsync(BaseItem item, CancellationToken cancellationToken, bool force = false)
     {
         if (!Enabled || !IsStrmItem(item))
         {
             return null;
         }
 
-        if (!NeedsRemoteSize(item))
+        if (!force && !NeedsRemoteSize(item))
         {
             return null;
         }
@@ -267,10 +274,12 @@ public sealed class RemoteSizeService : IDisposable
             return null;
         }
 
+        // A known URL is still the same remote object, so the cache is reused even in a forced
+        // run; only the write is forced.
         if (_urlSizes.TryGetValue(url, out var knownUrlSize) && !knownUrlSize.IsExpired())
         {
             Remember(item.Id, knownUrlSize.Size);
-            await PersistAsync(item, knownUrlSize.Size, cancellationToken).ConfigureAwait(false);
+            await PersistAsync(item, knownUrlSize.Size, cancellationToken, force).ConfigureAwait(false);
             return knownUrlSize.Size;
         }
 
@@ -292,7 +301,7 @@ public sealed class RemoteSizeService : IDisposable
 
         Remember(item.Id, size.Value);
         RememberUrl(url, size.Value);
-        await PersistAsync(item, size.Value, cancellationToken).ConfigureAwait(false);
+        await PersistAsync(item, size.Value, cancellationToken, force).ConfigureAwait(false);
         return size;
     }
 
@@ -398,11 +407,17 @@ public sealed class RemoteSizeService : IDisposable
 
     // ── Persistence ──
 
-    private async Task PersistAsync(BaseItem item, long size, CancellationToken cancellationToken)
+    private async Task PersistAsync(BaseItem item, long size, CancellationToken cancellationToken, bool force)
     {
-        if (!NeedsRemoteSize(item) || item.Size == size)
+        if (item.Size == size)
         {
-            // Never overwrite a size that is already plausible: it may come from a real probe.
+            return;
+        }
+
+        if (!force && !NeedsRemoteSize(item))
+        {
+            // Outside a forced run, never overwrite a size that is already plausible: it may come
+            // from a real probe.
             return;
         }
 
