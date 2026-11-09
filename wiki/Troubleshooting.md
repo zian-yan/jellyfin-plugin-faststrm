@@ -41,6 +41,25 @@
 
 ---
 
+## 安装/更新插件时报 504 / 下载失败
+
+```
+System.Net.Http.HttpRequestException: Response status code does not indicate success: 504 (Gateway Time-out).
+   at Emby.Server.Implementations.Updates.InstallationManager.PerformPackageInstallation(...)
+```
+
+这是 **Jellyfin 从 GitHub 下载 `FastSTRM.zip` 失败**，与插件本身无关。常见于新版本刚发布的几分钟内：GitHub 的下载节点对新上传的资产还没完成回源，会短暂返回 504，重试即可恢复（本地实测：连续 3 次 504，约 10 分钟后稳定 200）。
+
+处理：
+
+1. 等 5–10 分钟后在 **控制台 → 插件 → 目录** 里重试更新；
+2. 仍失败则手动安装：下载 `FastSTRM.dll`（Release 页的单个 dll 通常比 zip 先恢复），放到 `<插件目录>/FastSTRM/FastSTRM.dll`，重启 Jellyfin；
+3. 若长期 504，多半是本机到 GitHub 的链路问题，可给 Jellyfin 容器配置代理后再试。
+
+> 判断包是否完好：`FastSTRM.zip` 的 md5 应与 `manifest.json` 里该版本的 `checksum` 一致。不一致才是包的问题，504 不是。
+
+---
+
 ## 文件大小只有几百字节
 
 媒体信息页显示的大小在 100～300 字节上下，说明条目里存的还是**`.strm` 文本文件本身的大小**——Jellyfin 探测 `.strm` 时探测对象就是这个文件，ffprobe 也报不出远端真实长度（HTTP 流通常是 `size=N/A`）。
