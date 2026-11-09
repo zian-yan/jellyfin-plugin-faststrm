@@ -23,6 +23,10 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        // Resolves the real (remote) size of a .strm target; shared by the probe service and the
+        // media-source decorator, so both see the same cache.
+        serviceCollection.AddSingleton<RemoteSizeService>();
+
         // Register ProbeService as singleton + hosted service for ItemAdded event lifecycle
         serviceCollection.AddSingleton<ProbeService>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
@@ -39,6 +43,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                 sp.GetRequiredService<ILogger<MediaSourceInterceptor>>(),
                 sp,
                 sp.GetRequiredService<PlaybackPolicyResolver>(),
+                sp.GetRequiredService<RemoteSizeService>(),
                 ownsInner));
 
         // Decorate IUserDataManager so progress reported for an item that is still being

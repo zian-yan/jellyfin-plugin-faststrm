@@ -40,20 +40,25 @@ public class FastStrmController : ControllerBase
     [HttpGet("Summary")]
     public ActionResult GetSummary([FromQuery] bool refresh = false)
     {
-        var (total, probed, unprobed) = _probeService.GetSummary(refresh);
+        var (total, probed, unprobed, sizeMissing) = _probeService.GetSummary(refresh);
 
         // 这里返回的是**全局**播放策略。按用户区分的生效策略见 /FastStrm/PlaybackPolicy。
         var global = _policyResolver.GlobalPolicy;
+        var configuration = Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
         return Ok(new
         {
             Total = total,
             Probed = probed,
             Unprobed = unprobed,
+            // 仍是 .strm 文本文件大小的条目数（远端真实大小尚未写入）
+            SizeMissing = sizeMissing,
             SkipProbeForUnprobedStrm = global.SkipProbe,
             EnableBackgroundProbeForUnprobedStrm = global.EnableBackgroundProbe,
             BackgroundProbeDelaySeconds = global.BackgroundProbeDelaySeconds,
-            CancelBackgroundProbeOnPlaybackStop = global.CancelBackgroundProbeOnPlaybackStop
+            CancelBackgroundProbeOnPlaybackStop = global.CancelBackgroundProbeOnPlaybackStop,
+            EnableRemoteSize = configuration.EnableRemoteSize,
+            RemoteSizeTimeoutSeconds = configuration.GetRemoteSizeTimeoutSeconds()
         });
     }
 
@@ -125,7 +130,8 @@ public class FastStrmController : ControllerBase
         {
             return BadRequest(new
             {
-                Message = $"Unsupported mode '{mode}'. Use '{ProbeService.IncrementalMode}' or '{ProbeService.FullMode}'."
+                Message = $"Unsupported mode '{mode}'. Use '{ProbeService.IncrementalMode}', "
+                          + $"'{ProbeService.FullMode}' or '{ProbeService.SizeOnlyMode}'."
             });
         }
 

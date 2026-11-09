@@ -31,6 +31,19 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public const int MaxUserPolicies = 1000;
 
+    /// <summary>
+    /// Lower bound for the remote size request timeout, in seconds.
+    /// </summary>
+    public const int MinRemoteSizeTimeoutSeconds = 1;
+
+    /// <summary>
+    /// Upper bound for the remote size request timeout, so a typo cannot stall a whole probe run.
+    /// </summary>
+    public const int MaxRemoteSizeTimeoutSeconds = 60;
+
+    /// <summary>Default for <see cref="RemoteSizeTimeoutSeconds"/>.</summary>
+    public const int DefaultRemoteSizeTimeoutSeconds = 10;
+
     // ── 全局播放策略的默认值（唯一来源）──
     // 属性初始值、EffectivePlaybackPolicy.Defaults 与配置页的兜底取值全部引用这三个常量，
     // 因此「新增安装」「旧配置文件缺字段」「配置对象不可用」三条路径得到同一套默认策略。
@@ -91,6 +104,27 @@ public class PluginConfiguration : BasePluginConfiguration
     public int MaxConcurrentProbes { get; set; } = 1;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the real size of the remote file should be
+    /// resolved and stored on the .strm item. Default <c>true</c>.
+    /// </summary>
+    /// <remarks>
+    /// Jellyfin probes the .strm container, so the stored size is the size of the local .strm text
+    /// file (a few hundred bytes). When enabled, the plugin asks the stream endpoint for the real
+    /// length (HTTP HEAD, falling back to a one-byte ranged GET) and writes it onto the item, so
+    /// the media info shows the actual file size.
+    /// </remarks>
+    public bool EnableRemoteSize { get; set; } = DefaultEnableRemoteSize;
+
+    /// <summary>Default for <see cref="EnableRemoteSize"/>.</summary>
+    public const bool DefaultEnableRemoteSize = true;
+
+    /// <summary>
+    /// Gets or sets the timeout, in seconds, of a single remote size request.
+    /// Default 10 seconds, clamped to 1–60.
+    /// </summary>
+    public int RemoteSizeTimeoutSeconds { get; set; } = DefaultRemoteSizeTimeoutSeconds;
+
+    /// <summary>
     /// Gets or sets the per-user playback policies. A user without an entry here inherits the
     /// global policy; a user entry always wins over the global one. An entry whose
     /// <see cref="UserPlaybackPolicy.Mode"/> cannot be parsed is ignored (the user falls back to
@@ -110,6 +144,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public int GetMaxConcurrentProbes()
         => Math.Clamp(MaxConcurrentProbes, MinConcurrentProbes, MaxConcurrentProbesLimit);
+
+    /// <summary>
+    /// Gets the configured remote size request timeout clamped to
+    /// [<see cref="MinRemoteSizeTimeoutSeconds"/>, <see cref="MaxRemoteSizeTimeoutSeconds"/>].
+    /// </summary>
+    public int GetRemoteSizeTimeoutSeconds()
+        => Math.Clamp(RemoteSizeTimeoutSeconds, MinRemoteSizeTimeoutSeconds, MaxRemoteSizeTimeoutSeconds);
 
     /// <summary>
     /// Builds the global policy from the flat configuration fields.

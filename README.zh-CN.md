@@ -7,7 +7,7 @@
 <p align="center">让 Jellyfin 的 <code>.strm</code> 媒体跳过远程 <code>ffprobe</code>，点击即播。</p>
 
 <p align="center">
-  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.4.1-blue" alt="Release"></a>
+  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.5.0-blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/Jellyfin-12.0%2B-purple" alt="Jellyfin 12.0+">
   <img src="https://img.shields.io/badge/.NET-10.0-blueviolet" alt=".NET 10.0">
   <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/github/downloads/zian-yan/jellyfin-plugin-faststrm/total?label=Downloads&color=success" alt="Downloads"></a>
@@ -129,6 +129,30 @@ PlaybackInfo 请求
 
 ---
 
+## 远端文件大小
+
+Jellyfin 探测 `.strm` 时，探测对象是本地那个**文本文件**本身，所以写进条目的「文件大小」只是这个几百字节的 `.strm` 文件大小，媒体信息页显示的也是它。远端真实大小 ffprobe 也给不出来（HTTP 流通常返回 `size=N/A`）。
+
+开启 **控制台 → 插件 → FastSTRM → 补全远端文件大小**（默认开启）后：
+
+1. 插件读出 `.strm` 里的流地址，先发一个 `HEAD` 请求取 `Content-Length`；
+2. 源站不支持 `HEAD`（405/501）或没给长度时，退回 `Range: bytes=0-0` 的 `GET`，从 `Content-Range` 里取总长度；
+3. 拿到的大小写回条目（只覆盖 `< 1 MiB` 的记录，绝不覆盖已有的真实大小）。
+
+补全时机：
+
+| 场景 | 说明 |
+| :--- | :--- |
+| 增量 / 全量 / 入库自动 / 起播补探测 | 每次探测结束后顺带写入，不再额外请求内容 |
+| 浏览条目详情、开始播放 | 命中缓存直接替换显示，未命中则后台补一次（不阻塞响应） |
+| 手动补全 | 控制台选择 **仅补全文件大小** 启动，或 `POST /FastStrm/Probe/Start?mode=SizeOnly`（完全不走 ffprobe） |
+
+控制台统计新增 **缺少文件大小**，显示仍是 `.strm` 文件大小的条目数；请求超时默认 10 秒（1–60）。
+
+> 只做一次轻量请求，不下载内容；解析失败（超时、鉴权、源站不给长度）会保留原值，并在 10 分钟后才重试同一部影片。
+
+---
+
 ## 安装
 
 **方式一：下载 Release**
@@ -166,7 +190,7 @@ dotnet build Jellyfin.Plugin.FastSTRM/Jellyfin.Plugin.FastSTRM.csproj -c Release
 | `GET` | `/FastStrm/Summary` | 统计概览与当前全局策略 |
 | `GET` | `/FastStrm/PlaybackPolicy` | 全局策略 + 每个用户的生效策略与来源（`?userId=` 只查一个用户） |
 | `GET` | `/FastStrm/PlaybackPolicy/Effective` | 单个用户的生效策略；不带 `userId` 返回全局策略 |
-| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | 启动探测（`Incremental` / `Full`） |
+| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | 启动探测（`Incremental` / `Full` / `SizeOnly`） |
 | `POST` | `/FastStrm/Probe/Stop` | 停止探测 |
 | `GET` | `/FastStrm/Probe/Status` | 任务状态、进度与当前文件 |
 

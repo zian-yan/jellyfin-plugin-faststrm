@@ -22,6 +22,11 @@ export default function (view) {
             zhHant: '缺少流資訊',
             en: 'Missing stream info'
         },
+        'summary.sizeMissing': {
+            zh: '缺少文件大小',
+            zhHant: '缺少檔案大小',
+            en: 'Missing file size'
+        },
         'probe.mode.incremental': {
             zh: '增量探测',
             zhHant: '增量探測',
@@ -31,6 +36,11 @@ export default function (view) {
             zh: '全量探测',
             zhHant: '全量探測',
             en: 'Full'
+        },
+        'probe.mode.sizeOnly': {
+            zh: '仅补全文件大小',
+            zhHant: '僅補齊檔案大小',
+            en: 'File size only'
         },
         'probe.start': {
             zh: '启动预探测',
@@ -81,6 +91,26 @@ export default function (view) {
             zh: 'Strm入库自动探测',
             zhHant: 'Strm 入庫自動探測',
             en: 'Auto-probe STRM items on import'
+        },
+        'config.remoteSize': {
+            zh: '补全远端文件大小',
+            zhHant: '補齊遠端檔案大小',
+            en: 'Fill in the remote file size'
+        },
+        'config.remoteSizeDesc': {
+            zh: 'Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。',
+            zhHant: 'Jellyfin 探測 .strm 時只能取得文字檔本身的大小，開啟後會向串流位址請求真實大小並寫入項目。',
+            en: 'Jellyfin only sees the size of the .strm text file. When on, the plugin asks the stream endpoint for the real size and stores it on the item.'
+        },
+        'config.remoteSizeTimeout': {
+            zh: '大小请求超时（秒）',
+            zhHant: '大小請求逾時（秒）',
+            en: 'Size request timeout (seconds)'
+        },
+        'config.remoteSizeTimeoutDesc': {
+            zh: '默认 10 秒，范围 1–60。先发 HEAD 请求，失败再退回 1 字节的 Range 请求。',
+            zhHant: '預設 10 秒，範圍 1–60。先送 HEAD 請求，失敗再改用 1 位元組的 Range 請求。',
+            en: 'Default 10 seconds, range 1-60. Sends a HEAD request first and falls back to a one-byte ranged GET.'
         },
         'config.skipUnprobed': {
             zh: '未探测的 STRM 文件也跳过探测',
@@ -319,6 +349,7 @@ export default function (view) {
     var lblTotal = view.querySelector('#lblSummaryTotal');
     var lblProbed = view.querySelector('#lblSummaryProbed');
     var lblUnprobed = view.querySelector('#lblSummaryUnprobed');
+    var lblSizeMissing = view.querySelector('#lblSummarySizeMissing');
     var selectMode = view.querySelector('#selectProbeMode');
     var btnStart = view.querySelector('#btnStartProbe');
     var btnStop = view.querySelector('#btnStopProbe');
@@ -327,6 +358,9 @@ export default function (view) {
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
     var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
     var txtProbeConcurrency = view.querySelector('#txtProbeConcurrency');
+    var chkEnableRemoteSize = view.querySelector('#chkEnableRemoteSize');
+    var txtRemoteSizeTimeout = view.querySelector('#txtRemoteSizeTimeout');
+    var remoteSizeTimeoutContainer = view.querySelector('#remoteSizeTimeoutContainer');
     var chkSkipProbeForUnprobed = view.querySelector('#chkSkipProbeForUnprobedStrm');
     var selectUnprobedPlaybackMode = view.querySelector('#selectUnprobedPlaybackMode');
     var txtBackgroundProbeDelay = view.querySelector('#txtBackgroundProbeDelay');
@@ -384,6 +418,21 @@ export default function (view) {
             return 1;
         }
         return Math.min(16, Math.max(1, limit));
+    }
+
+    function clampRemoteSizeTimeout(value) {
+        var seconds = parseInt(value, 10);
+        if (isNaN(seconds)) {
+            return 10;
+        }
+        return Math.min(60, Math.max(1, seconds));
+    }
+
+    // 关闭补全远端大小时，超时输入框没有意义：置灰但保留原值，避免用户以为是配置丢失。
+    function updateRemoteSizeState() {
+        var enabled = chkEnableRemoteSize.checked;
+        txtRemoteSizeTimeout.disabled = !enabled;
+        remoteSizeTimeoutContainer.style.opacity = enabled ? '1' : '0.5';
     }
 
     function policyKey(userId) {
@@ -635,6 +684,10 @@ export default function (view) {
             lblTotal.textContent = data.Total;
             lblProbed.textContent = data.Probed;
             lblUnprobed.textContent = data.Unprobed;
+            // 旧版服务端不返回该字段：显示 "-" 而不是 "undefined"。
+            lblSizeMissing.textContent = data.SizeMissing === undefined || data.SizeMissing === null
+                ? '-'
+                : data.SizeMissing;
         }).catch(function () {
             // The summary is a whole-library scan on the server; a transient failure only means
             // the counters stay as they are, so do not surface it as an unhandled rejection.
@@ -670,6 +723,10 @@ export default function (view) {
             chkAutoProbe.checked = config.EnableAutoProbe;
             // 默认值为 true：旧配置文件中没有该字段时也保持"跳过探测"的极速模式
             txtProbeConcurrency.value = clampConcurrency(config.MaxConcurrentProbes);
+            // 默认开启：旧配置文件没有该字段时同样补全远端文件大小
+            chkEnableRemoteSize.checked = config.EnableRemoteSize !== false;
+            txtRemoteSizeTimeout.value = clampRemoteSizeTimeout(config.RemoteSizeTimeoutSeconds);
+            updateRemoteSizeState();
             chkSkipProbeForUnprobed.checked = config.SkipProbeForUnprobedStrm !== false;
             // 默认不补探测：旧配置文件中没有该字段时按“直接起播，不补探测”处理
             selectUnprobedPlaybackMode.value = config.EnableBackgroundProbeForUnprobedStrm === true
@@ -781,9 +838,13 @@ export default function (view) {
             config.BackgroundProbeDelaySeconds = clampDelaySeconds(txtBackgroundProbeDelay.value);
             config.CancelBackgroundProbeOnPlaybackStop = chkCancelProbeOnPlaybackStop.checked;
             config.MaxConcurrentProbes = clampConcurrency(txtProbeConcurrency.value);
+            config.EnableRemoteSize = chkEnableRemoteSize.checked;
+            config.RemoteSizeTimeoutSeconds = clampRemoteSizeTimeout(txtRemoteSizeTimeout.value);
             config.UserPolicies = collectUserPolicies();
             txtBackgroundProbeDelay.value = config.BackgroundProbeDelaySeconds;
             txtProbeConcurrency.value = config.MaxConcurrentProbes;
+            txtRemoteSizeTimeout.value = config.RemoteSizeTimeoutSeconds;
+            updateRemoteSizeState();
             ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
                 Dashboard.processPluginConfigurationUpdateResult();
 
@@ -799,6 +860,7 @@ export default function (view) {
 
     chkSkipProbeForUnprobed.addEventListener('change', updateUnprobedPlaybackState);
     selectUnprobedPlaybackMode.addEventListener('change', updateUnprobedPlaybackState);
+    chkEnableRemoteSize.addEventListener('change', updateRemoteSizeState);
 
     // ── Page lifecycle ──
 
@@ -815,6 +877,7 @@ export default function (view) {
         });
         updateUnprobedPlaybackState();
         updateAddRowState();
+        updateRemoteSizeState();
     });
 
     view.addEventListener('viewhide', function () {

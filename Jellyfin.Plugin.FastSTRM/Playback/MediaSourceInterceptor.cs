@@ -39,6 +39,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     private readonly ILogger<MediaSourceInterceptor> _logger;
     private readonly IServiceProvider _serviceProvider;
     private readonly PlaybackPolicyResolver _policyResolver;
+    private readonly RemoteSizeService _remoteSize;
 
     /// <summary>
     /// Whether this decorator is the only owner of <see cref="_inner"/>. An instance that came
@@ -58,12 +59,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         ILogger<MediaSourceInterceptor> logger,
         IServiceProvider serviceProvider,
         PlaybackPolicyResolver policyResolver,
+        RemoteSizeService remoteSize,
         bool disposeInner)
     {
         _inner = inner;
         _logger = logger;
         _serviceProvider = serviceProvider;
         _policyResolver = policyResolver;
+        _remoteSize = remoteSize;
         _disposeInner = disposeInner;
     }
 
@@ -112,9 +115,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 LogSafe.Name(item),
                 policy.Source);
 
-            return await _inner.GetPlaybackMediaSources(
+            var probedSources = await _inner.GetPlaybackMediaSources(
                 item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
                 .ConfigureAwait(false);
+
+            _remoteSize.ApplyToSources(item, probedSources);
+            return probedSources;
         }
 
         _logger.LogDebug(
@@ -140,6 +146,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         }
 
         WarnIfStreamInfoMissing(item, hasStreamInfo, sources, backgroundProbeDelaySeconds);
+
+        // Jellyfin materialises Size from item.Size, which for a .strm item is the size of the
+        // local text file. Replace it with the remote size when it is already known, and resolve
+        // it in the background (without delaying this response) when it is not.
+        _remoteSize.ApplyToSources(item, sources);
         return sources;
     }
 
@@ -232,8 +243,22 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     public IReadOnlyList<MediaAttachment> GetMediaAttachments(MediaAttachmentQuery query)
         => _inner.GetMediaAttachments(query);
 
+    /// <summary>
+    /// Applies the known remote size to the static media sources Jellyfin builds for the DTOs
+    /// (item details, media info page). Without this the size shown there stays the size of the
+    /// local .strm text file until the value is written to the database.
+    /// </summary>
     public IReadOnlyList<MediaSourceInfo> GetStaticMediaSources(BaseItem item, bool enablePathSubstitution, User user = null)
-        => _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
+    {
+        var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
+
+        if (IsStrmItem(item))
+        {
+            _remoteSize.ApplyToSources(item, sources);
+        }
+
+        return sources;
+    }
 
     public Task<MediaSourceInfo> GetMediaSource(BaseItem item, string mediaSourceId, string liveStreamId, bool enablePathSubstitution, CancellationToken cancellationToken)
         => _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken);

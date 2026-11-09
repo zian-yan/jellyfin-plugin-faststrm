@@ -34,8 +34,8 @@
             <!-- 面板卡片 -->
             <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 1.4em;">
                 
-                <!-- 三大指标 -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
+                <!-- 四大指标 -->
+                <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
                     <div>
                         <div style="font-size: 0.8em; color: #888; margin-bottom: 0.2em;" data-i18n="summary.total">.strm 媒体数量</div>
                         <div id="lblSummaryTotal" style="font-size: 1.6em; font-weight: 600; color: #fff;">-</div>
@@ -48,6 +48,10 @@
                         <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;" data-i18n="summary.unprobed">缺少流信息</div>
                         <div id="lblSummaryUnprobed" style="font-size: 1.6em; font-weight: 600; color: #ff9800;">-</div>
                     </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;" data-i18n="summary.sizeMissing">缺少文件大小</div>
+                        <div id="lblSummarySizeMissing" style="font-size: 1.6em; font-weight: 600; color: #2196f3;">-</div>
+                    </div>
                 </div>
 
                 <!-- 模式选择与按钮 -->
@@ -56,6 +60,7 @@
                         <select is="emby-select" id="selectProbeMode" class="emby-select fsrm-control" style="margin: 0;">
                             <option value="Incremental" data-i18n="probe.mode.incremental">增量探测</option>
                             <option value="Full" data-i18n="probe.mode.full">全量探测</option>
+                            <option value="SizeOnly" data-i18n="probe.mode.sizeOnly">仅补全文件大小</option>
                         </select>
                     </div>
                     <div>
@@ -94,6 +99,22 @@
                     <input is="emby-input" type="number" id="txtProbeConcurrency" min="1" max="16" step="1" value="1" />
                     <div class="fieldDescription" data-i18n="config.concurrencyDesc">
                         增量探测、全量探测、入库自动探测与补探测统一使用该并发数，默认 1，范围 1–16。
+                    </div>
+                </div>
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableRemoteSize" />
+                        <span data-i18n="config.remoteSize">补全远端文件大小</span>
+                    </label>
+                </div>
+                <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.remoteSizeDesc">
+                    Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。
+                </div>
+                <div class="inputContainer" id="remoteSizeTimeoutContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="txtRemoteSizeTimeout" data-i18n="config.remoteSizeTimeout">大小请求超时（秒）</label>
+                    <input is="emby-input" type="number" id="txtRemoteSizeTimeout" min="1" max="60" step="1" value="10" />
+                    <div class="fieldDescription" data-i18n="config.remoteSizeTimeoutDesc">
+                        默认 10 秒，范围 1–60。先发 HEAD 请求，失败再退回 1 字节的 Range 请求。
                     </div>
                 </div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox">

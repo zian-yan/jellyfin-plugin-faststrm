@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.5.0] - 2026-11-09
+
+### ✨ 新增
+
+- **远端文件大小补全**：Jellyfin 探测 `.strm` 时只能拿到本地文本文件本身的大小，插件现在会读取 `.strm` 内的流地址，用 `HEAD`（失败退回 1 字节 `Range` 请求）取真实长度并写回条目，媒体信息页显示真实文件大小。
+- 新增配置项 **补全远端文件大小**（默认开启）与 **大小请求超时**（默认 10 秒，1–60）。
+- 新增探测模式 **`SizeOnly`（仅补全文件大小）**：完全不走 ffprobe，批量补全仍缺真实大小的条目；配置页下拉框与 `POST /FastStrm/Probe/Start?mode=SizeOnly` 均可用。
+- `GET /FastStrm/Summary` 新增 `SizeMissing`、`EnableRemoteSize`、`RemoteSizeTimeoutSeconds`；配置页统计新增「缺少文件大小」指标。
+
+### 💬 优化
+
+- 增量、全量、入库自动与起播补探测结束后自动补写远端大小，无需再单独跑一轮任务。
+- 浏览条目详情或开始播放时，若已有缓存直接替换 `MediaSourceInfo.Size`；未命中则后台补一次请求，不阻塞响应、不增加起播等待。
+- 只覆盖 `< 1 MiB` 的大小记录，已有真实大小不会被覆盖；同一 URL 共用一次请求，失败条目 10 分钟内不重复请求。
+
+---
+
 ## [3.4.2] - 2026-11-06
 
 ### ✨ 新增

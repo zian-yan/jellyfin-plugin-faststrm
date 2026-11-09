@@ -7,7 +7,7 @@
 <p align="center">Skip remote <code>ffprobe</code> for Jellyfin <code>.strm</code> media — click and play.</p>
 
 <p align="center">
-  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.4.1-blue" alt="Release"></a>
+  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.5.0-blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/Jellyfin-12.0%2B-purple" alt="Jellyfin 12.0+">
   <img src="https://img.shields.io/badge/.NET-10.0-blueviolet" alt=".NET 10.0">
   <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/github/downloads/zian-yan/jellyfin-plugin-faststrm/total?label=Downloads&color=success" alt="Downloads"></a>
@@ -130,6 +130,30 @@ Details, fallback matrix and API examples: see the Wiki —
 
 ---
 
+## Remote file size
+
+When Jellyfin probes a `.strm` item it probes the **local text file**, so the stored "file size" — and therefore the size shown on the media info page — is the size of that few-hundred-byte `.strm` file. ffprobe cannot supply the real size either (HTTP streams usually report `size=N/A`).
+
+With **Dashboard → Plugins → FastSTRM → Fill in the remote file size** enabled (the default):
+
+1. The plugin reads the stream URL out of the `.strm` file and sends a `HEAD` request for `Content-Length`;
+2. If the endpoint rejects `HEAD` (405/501) or omits the length, it falls back to a one-byte ranged `GET` and reads the total from `Content-Range`;
+3. The resolved size is written back onto the item (only records below `< 1 MiB` are replaced — a plausible size is never overwritten).
+
+When it runs:
+
+| Scenario | Behaviour |
+| :--- | :--- |
+| Incremental / full / on-import / post-start probe | Filled in right after each probe, with no extra content request |
+| Opening item details, starting playback | Served from cache when known, otherwise resolved in the background without delaying the response |
+| Manual | Pick **File size only** in the dashboard, or `POST /FastStrm/Probe/Start?mode=SizeOnly` (no ffprobe at all) |
+
+The dashboard gains a **Missing file size** counter; the request timeout defaults to 10 seconds (1–60).
+
+> Only a lightweight header request is made — nothing is downloaded. Failures (timeout, auth, no length reported) keep the previous value and are retried at most every 10 minutes per item.
+
+---
+
 ## Installation
 
 **Option 1: download a release**
@@ -167,7 +191,7 @@ Requires an admin token or an authenticated session.
 | `GET` | `/FastStrm/Summary` | Summary statistics and the current global policy |
 | `GET` | `/FastStrm/PlaybackPolicy` | Global policy plus every user's effective policy and its source (`?userId=` limits to one user) |
 | `GET` | `/FastStrm/PlaybackPolicy/Effective` | Effective policy for a single user; without `userId` returns the global policy |
-| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | Start probing (`Incremental` / `Full`) |
+| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | Start probing (`Incremental` / `Full` / `SizeOnly`) |
 | `POST` | `/FastStrm/Probe/Stop` | Stop probing |
 | `GET` | `/FastStrm/Probe/Status` | Task state, progress and current file |
 

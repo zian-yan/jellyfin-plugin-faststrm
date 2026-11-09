@@ -65,6 +65,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly IDirectoryService _directoryService;
     private readonly ISessionManager _sessionManager;
+    private readonly RemoteSizeService _remoteSize;
     private readonly ILogger<ProbeService> _logger;
 
     private CancellationTokenSource? _cts;
@@ -94,7 +95,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// runs once per <see cref="SummaryCacheTtl"/> instead of once per page view.
     /// </summary>
     private readonly object _summaryLock = new();
-    private (int Total, int Probed, int Unprobed) _summaryCache;
+    private (int Total, int Probed, int Unprobed, int SizeMissing) _summaryCache;
     private long _summaryCacheUtcTicks;
     private long _lastPruneUtcTicks;
 
@@ -186,11 +187,13 @@ public sealed class ProbeService : IHostedService, IDisposable
         ILibraryManager libraryManager,
         IDirectoryService directoryService,
         ISessionManager sessionManager,
+        RemoteSizeService remoteSize,
         ILogger<ProbeService> logger)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _sessionManager = sessionManager;
+        _remoteSize = remoteSize;
         _logger = logger;
     }
 
@@ -496,14 +499,27 @@ public sealed class ProbeService : IHostedService, IDisposable
     public const string FullMode = "Full";
 
     /// <summary>
+    /// Size-only mode: no ffprobe at all, only the real (remote) file size of every .strm item
+    /// whose stored size is still the size of the .strm text file.
+    /// </summary>
+    public const string SizeOnlyMode = "SizeOnly";
+
+    /// <summary>
     /// Normalizes a probe mode. Unknown values are rejected instead of silently falling back to
     /// a full-library probe, so a typo cannot trigger an expensive rescan.
     /// </summary>
     public static bool TryParseMode(string? mode, out string normalized)
     {
         normalized = FullMode;
+
         if (string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase))
         {
+            return true;
+        }
+
+        if (string.Equals(mode, SizeOnlyMode, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = SizeOnlyMode;
             return true;
         }
 
@@ -524,7 +540,11 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <see cref="SummaryCacheTtl"/> because computing it scans the whole video library.
     /// </summary>
     /// <param name="forceRefresh">Bypasses the cache, e.g. right after a probe finished.</param>
-    public (int Total, int Probed, int Unprobed) GetSummary(bool forceRefresh = false)
+    /// <returns>
+    /// Total, probed and unprobed item counts plus the number of items whose stored size is still
+    /// the size of the .strm text file instead of the remote media.
+    /// </returns>
+    public (int Total, int Probed, int Unprobed, int SizeMissing) GetSummary(bool forceRefresh = false)
     {
         lock (_summaryLock)
         {
@@ -540,7 +560,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             var items = GetStrmItems();
             var probed = items.Count(HasStreamInfo);
-            _summaryCache = (items.Count, probed, items.Count - probed);
+            var sizeMissing = items.Count(RemoteSizeService.NeedsRemoteSize);
+            _summaryCache = (items.Count, probed, items.Count - probed, sizeMissing);
             _summaryCacheUtcTicks = now.Ticks;
             return _summaryCache;
         }
@@ -842,8 +863,15 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             // The library scan stays off the caller's lock: on a large library it takes seconds
             // and would otherwise block StopProbe and this task's own finally block.
+            var sizeOnly = string.Equals(mode, SizeOnlyMode, StringComparison.OrdinalIgnoreCase);
+
             var items = GetStrmItems();
-            if (string.Equals(mode, IncrementalMode, StringComparison.OrdinalIgnoreCase))
+            if (sizeOnly)
+            {
+                // No ffprobe in this mode: only items still carrying the .strm file size.
+                items = items.Where(RemoteSizeService.NeedsRemoteSize).ToList();
+            }
+            else if (string.Equals(mode, IncrementalMode, StringComparison.OrdinalIgnoreCase))
             {
                 items = items.Where(i => !HasStreamInfo(i)).ToList();
             }
@@ -879,7 +907,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                     CurrentItemName = name;
                     LogProgress(index, total, name);
 
-                    await ProbeItemAsync(item, token).ConfigureAwait(false);
+                    if (sizeOnly)
+                    {
+                        await FillRemoteSizeAsync(item, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await ProbeItemAsync(item, token).ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -983,6 +1018,30 @@ public sealed class ProbeService : IHostedService, IDisposable
                 MetadataRefreshMode = MetadataRefreshMode.FullRefresh
             },
             ct).ConfigureAwait(false);
+
+        // The official probe measures the .strm container, so the size it stores is the size of
+        // the local text file. Replace it with the real remote size after the refresh.
+        await FillRemoteSizeAsync(item, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves and stores the real (remote) size of the item's .strm target.
+    /// Never throws: a failing size lookup must not fail the surrounding probe.
+    /// </summary>
+    private async Task FillRemoteSizeAsync(BaseItem item, CancellationToken ct)
+    {
+        try
+        {
+            await _remoteSize.ResolveAsync(item, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "FastSTRM: Remote size lookup failed for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
+        }
     }
 
     private List<BaseItem> GetStrmItems()
