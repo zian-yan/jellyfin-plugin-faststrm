@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.5.3.0",
+        "changelog": "### 修复\n\n- 「补全远端文件大小」不再在「官方探测」与「不补探测」策略下运行：起播与浏览详情都不再请求流地址；只有「跳过探测 · 后台补探测」以及手动批量探测、仅补全文件大小才会运行。\n- 配置页说明同步标明该功能的生效范围。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.3/FastSTRM.zip",
+        "checksum": "d5625fecf0fd4b6446a26b0289eaf0c6",
+        "timestamp": "2026-11-09T15:07:41Z"
+      },
+      {
         "version": "3.5.2.0",
         "changelog": "### 安全\n\n- 补全远端文件大小时增加目标地址校验：链路本地地址、组播地址与保留网段一律拒绝，避免有人通过写入 strm 文件让插件去请求内网探测端点。\n- 域名解析结果与重定向目标落在同一校验范围内，可阻断域名重绑定；重定向跳数由 5 次降为 3 次。\n- 新增开关，可将内网访问范围收紧为仅公网。\n\n### 修复\n\n- 全量探测真正重新解析远端大小，不再复用旧缓存结果。\n- 修复小于 1 MB 的短片、音乐视频永远补不上大小的问题，补全下限降至 4 KB。\n- 单次请求超时不再中断整个补全流程，改用轻量请求兜底，并且每个请求独立计时。\n- 修复补全结果与数据库记录长期不一致的问题。\n- 服务关闭瞬间到达的入库事件不再抛出异常。\n\n### 优化\n\n- 播放策略解析减少重复计算，配置未变化时直接跳过。\n\n### 测试\n\n- 补充地址分级校验与远端大小请求链路的单元测试。",
         "targetAbi": "12.0.0.0",
