@@ -98,9 +98,9 @@ export default function (view) {
             en: 'Fill in the remote file size'
         },
         'config.remoteSizeDesc': {
-            zh: 'Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。',
-            zhHant: 'Jellyfin 探測 .strm 時只能取得文字檔本身的大小，開啟後會向串流位址請求真實大小並寫入項目。',
-            en: 'Jellyfin only sees the size of the .strm text file. When on, the plugin asks the stream endpoint for the real size and stores it on the item.'
+            zh: 'Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。仅在「跳过探测 · 后台补探测」策略、批量探测或「仅补全文件大小」时生效，「官方探测」与「不补探测」下不会运行。',
+            zhHant: 'Jellyfin 探測 .strm 時只能取得文字檔本身的大小，開啟後會向串流位址請求真實大小並寫入項目。僅在「跳過探測 · 背景補探測」策略、批次探測或「僅補齊檔案大小」時生效，「官方探測」與「不補探測」下不會執行。',
+            en: 'Jellyfin only sees the size of the .strm text file. When on, the plugin asks the stream endpoint for the real size and stores it on the item. It only runs under the "skip probe + background probe" policy, a batch probe, or the size-only mode; it never runs with "official probe" or "skip probe, no background probe".'
         },
         'config.remoteSizeTimeout': {
             zh: '大小请求超时（秒）',

@@ -108,7 +108,7 @@
                     </label>
                 </div>
                 <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.remoteSizeDesc">
-                    Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。
+                    Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。仅在「跳过探测 · 后台补探测」策略、批量探测或「仅补全文件大小」时生效，「官方探测」与「不补探测」下不会运行。
                 </div>
                 <div class="inputContainer" id="remoteSizeTimeoutContainer">
                     <label class="inputLabel inputLabelUnfocused" for="txtRemoteSizeTimeout" data-i18n="config.remoteSizeTimeout">大小请求超时（秒）</label>
