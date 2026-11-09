@@ -7,7 +7,7 @@
 <p align="center">Skip remote <code>ffprobe</code> for Jellyfin <code>.strm</code> media — click and play.</p>
 
 <p align="center">
-  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.5.0-blue" alt="Release"></a>
+  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.5.1-blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/Jellyfin-12.0%2B-purple" alt="Jellyfin 12.0+">
   <img src="https://img.shields.io/badge/.NET-10.0-blueviolet" alt=".NET 10.0">
   <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/github/downloads/zian-yan/jellyfin-plugin-faststrm/total?label=Downloads&color=success" alt="Downloads"></a>

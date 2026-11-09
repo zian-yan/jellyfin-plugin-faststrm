@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [3.5.1] - 2026-11-09
+
 ### 💬 优化
 
 - **全量探测保持「完全刷新」语义**：仍会重新解析远端大小并用新值覆盖已有记录，即使该条目已有可信大小。
