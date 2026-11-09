@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.5.1.0",
+        "changelog": "### 💬 优化\n\n- **全量探测保持「完全刷新」语义**：仍会重新解析远端大小并用新值覆盖已有记录，即使该条目已有可信大小。\n- 其它路径（增量探测、入库自动探测、起播补探测、浏览详情）对已有可信大小（≥ 1 MiB）的条目直接跳过：既不读 `.strm`，也不请求流地址。\n- 「仅补全文件大小」只处理仍缺失的条目，不会对已补全的条目重复发请求。\n- `.strm` 被替换后库扫描会把大小重置为新的文本文件长度，条目会自动重新进入补全，无需手动干预。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.1/FastSTRM.zip",
+        "checksum": "337ac06ade648ef5cf4d33391695072c",
+        "timestamp": "2026-11-09T06:36:49Z"
+      },
+      {
         "version": "3.5.0.0",
         "changelog": "### ✨ 新增\n\n- **远端文件大小补全**：Jellyfin 探测 `.strm` 时只能拿到本地文本文件本身的大小，插件现在会读取 `.strm` 内的流地址，用 `HEAD`（失败退回 1 字节 `Range` 请求）取真实长度并写回条目，媒体信息页显示真实文件大小。\n- 新增配置项 **补全远端文件大小**（默认开启）与 **大小请求超时**（默认 10 秒，1–60）。\n- 新增探测模式 **`SizeOnly`（仅补全文件大小）**：完全不走 ffprobe，批量补全仍缺真实大小的条目；配置页下拉框与 `POST /FastStrm/Probe/Start?mode=SizeOnly` 均可用。\n- `GET /FastStrm/Summary` 新增 `SizeMissing`、`EnableRemoteSize`、`RemoteSizeTimeoutSeconds`；配置页统计新增「缺少文件大小」指标。\n\n### 💬 优化\n\n- 增量、全量、入库自动与起播补探测结束后自动补写远端大小，无需再单独跑一轮任务。\n- 浏览条目详情或开始播放时，若已有缓存直接替换 `MediaSourceInfo.Size`；未命中则后台补一次请求，不阻塞响应、不增加起播等待。\n- 只覆盖 `< 1 MiB` 的大小记录，已有真实大小不会被覆盖；同一 URL 共用一次请求，失败条目 10 分钟内不重复请求。\n\n---",
         "targetAbi": "12.0.0.0",
