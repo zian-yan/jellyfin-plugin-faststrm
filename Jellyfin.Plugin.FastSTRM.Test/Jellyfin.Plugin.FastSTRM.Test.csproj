@@ -17,6 +17,16 @@
     </PackageReference>
   </ItemGroup>
 
+  <!--
+    插件项目对 Jellyfin 包使用了 ExcludeAssets="runtime"，宿主会提供这些程序集；
+    但测试进程没有宿主，实例化 BaseItem（Video）时必须能加载 MediaBrowser.Controller，
+    所以测试项目自己引用一份，且保留 runtime 资产。
+  -->
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="12.0.0" />
+    <PackageReference Include="Jellyfin.Model" Version="12.0.0" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Jellyfin.Plugin.FastSTRM\Jellyfin.Plugin.FastSTRM.csproj" />
   </ItemGroup>
