@@ -117,6 +117,15 @@
                         默认 10 秒，范围 1–60。先发 HEAD 请求，失败再退回 1 字节的 Range 请求。
                     </div>
                 </div>
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" id="allowPrivateNetworkTargetsContainer">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="chkAllowPrivateNetworkTargets" />
+                        <span data-i18n="config.allowPrivateNetworkTargets">允许请求内网地址</span>
+                    </label>
+                </div>
+                <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.allowPrivateNetworkTargetsDesc">
+                    默认开启（局域网 Emby / Alist / OpenList 需要）。关闭后只允许请求公网地址；链路本地地址（含 169.254.169.254 云元数据端点）无论如何都会被拒绝。
+                </div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
                     <label>
                         <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" />

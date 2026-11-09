@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -52,6 +53,42 @@ public class PluginMetadataTests
 
         Assert.False(string.IsNullOrWhiteSpace(targetAbi));
         Assert.Matches(@"^\d+\.\d+\.\d+\.\d+$", targetAbi!);
+    }
+
+    /// <summary>
+    /// manifest.json 是插件目录的更新入口，但它由发布流水线在打包**之后**写入最新版本
+    /// （需要 zip 的 md5），所以「manifest 最新版本 == csproj 版本」只能在发布后校验，
+    /// 放进这里会让打 tag 时的构建必失败。这里只守住与版本无关、却能真正挡住事故的两条：
+    /// guid 一致，以及条目结构（版本递减、checksum 是 md5 形态）。
+    /// </summary>
+    [Fact]
+    public void Manifest_MatchesGuidAndKeepsVersionsOrdered()
+    {
+        var root = RepoRoot();
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "manifest.json")));
+
+        var plugin = doc.RootElement[0];
+        Assert.Equal(Plugin.PluginGuid, plugin.GetProperty("guid").GetString(), StringComparer.OrdinalIgnoreCase);
+
+        var versions = plugin.GetProperty("versions").EnumerateArray().ToList();
+        Assert.NotEmpty(versions);
+
+        var previous = new Version(int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue);
+        foreach (var entry in versions)
+        {
+            var version = new Version(entry.GetProperty("version").GetString()!);
+            Assert.True(version <= previous, $"manifest.json 版本未按从新到旧排列：{version} 出现在 {previous} 之后");
+            previous = version;
+
+            var checksum = entry.TryGetProperty("checksum", out var checksumElement)
+                ? checksumElement.GetString()
+                : null;
+
+            if (!string.IsNullOrEmpty(checksum))
+            {
+                Assert.Matches("^[0-9a-f]{32}$", checksum);
+            }
+        }
     }
 
     private static string ReadCsprojVersion(string root)

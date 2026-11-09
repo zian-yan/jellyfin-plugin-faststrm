@@ -24,8 +24,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         // Resolves the real (remote) size of a .strm target; shared by the probe service and the
-        // media-source decorator, so both see the same cache.
-        serviceCollection.AddSingleton<RemoteSizeService>();
+        // media-source decorator, so both see the same cache. Built through an explicit factory so
+        // the test-only transport seam can never be picked up by the container.
+        serviceCollection.AddSingleton(sp => new RemoteSizeService(
+            sp.GetRequiredService<ILibraryManager>(),
+            sp.GetRequiredService<ILogger<RemoteSizeService>>()));
 
         // Register ProbeService as singleton + hosted service for ItemAdded event lifecycle
         serviceCollection.AddSingleton<ProbeService>();

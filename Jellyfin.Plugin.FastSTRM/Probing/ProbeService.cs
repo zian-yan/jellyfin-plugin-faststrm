@@ -321,9 +321,12 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        var token = _shutdownCts?.Token ?? CancellationToken.None;
         try
         {
+            // Reading _shutdownCts.Token throws ObjectDisposedException once Dispose() ran, so it
+            // must stay inside the try: an exception escaping here would propagate into Jellyfin's
+            // ItemAdded invocation during shutdown.
+            var token = _shutdownCts?.Token ?? CancellationToken.None;
             var task = Task.Run(() => RunAutoProbeAsync(item, token));
             _autoProbeTasks[item.Id] = task;
             if (task.IsCompleted)

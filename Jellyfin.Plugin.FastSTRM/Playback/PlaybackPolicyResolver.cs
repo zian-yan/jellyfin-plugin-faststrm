@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using FastSTRM.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -40,6 +41,13 @@ public sealed class PlaybackPolicyResolver
     private const long DefaultFingerprint = 0;
 
     /// <summary>
+    /// 内容指纹的最短重算间隔。配置对象引用没变时，最多这么久才重新比对一次内容：
+    /// 播放热路径（每次 PlaybackInfo / 进度上报）不再遍历全部用户策略，
+    /// 同时仍能在「同一个配置对象被原地改动」时于 1 秒内发现。
+    /// </summary>
+    private static readonly TimeSpan FingerprintInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// 本次播放策略记录的上限。条目只用于「同一次播放内保持一致」，播放量再大也不该常驻，
     /// 因此超过上限直接清空（清空后进度上报退回会话反查，不会误判）。
     /// </summary>
@@ -55,6 +63,12 @@ public sealed class PlaybackPolicyResolver
     /// 因此用取源时的结论贯穿整次播放。
     /// </summary>
     private readonly ConcurrentDictionary<Guid, EffectivePlaybackPolicy> _playbackPolicies = new();
+
+    /// <summary>
+    /// 上一次计算内容指纹的时间（UTC ticks，0 表示从未算过）。只用于给 <see cref="FingerprintInterval"/>
+    /// 提供节流依据，故意用 <see cref="Interlocked"/> 而不是锁：热路径上不能有争用。
+    /// </summary>
+    private long _lastFingerprintUtcTicks;
 
     /// <summary>
     /// 当前生效的解析快照。整对象替换（而不是原地修改），读者无需加锁。
@@ -244,7 +258,19 @@ public sealed class PlaybackPolicyResolver
 
         try
         {
+            var now = DateTime.UtcNow.Ticks;
+
+            // 快路径：保存配置一定会换成新的配置对象，因此引用未变 + 距上次内容比对不足
+            // FingerprintInterval 时可以直接复用快照。热路径上只做一次引用比较和一次
+            // Interlocked 读，不再遍历全部用户策略算指纹。
+            if (ReferenceEquals(snapshot.Config, config)
+                && now - Interlocked.Read(ref _lastFingerprintUtcTicks) < FingerprintInterval.Ticks)
+            {
+                return snapshot;
+            }
+
             var fingerprint = ComputeFingerprint(config);
+            Interlocked.Exchange(ref _lastFingerprintUtcTicks, now);
 
             // 配置对象被替换（保存配置）或内容被原地改动（手工改 XML 后重载）都会走到重建。
             if (ReferenceEquals(snapshot.Config, config) && snapshot.Fingerprint == fingerprint)

@@ -125,6 +125,23 @@ public class PluginConfiguration : BasePluginConfiguration
     public int RemoteSizeTimeoutSeconds { get; set; } = DefaultRemoteSizeTimeoutSeconds;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the size lookup may connect to loopback, private
+    /// (RFC1918 / CGNAT) or IPv6 ULA addresses.
+    /// </summary>
+    /// <remarks>
+    /// Default <c>true</c>, because a LAN Emby / Alist / OpenList origin is the normal deployment.
+    /// Link-local addresses (including the cloud metadata endpoint 169.254.169.254), multicast,
+    /// unspecified and reserved ranges are always refused regardless of this switch: no legitimate
+    /// media origin lives there, and a <c>.strm</c> file is untrusted input that anyone with write
+    /// access to the library folder can craft. Set this to <c>false</c> to also block private and
+    /// loopback targets — recommended when the library folder is writable by non-administrators.
+    /// </remarks>
+    public bool AllowPrivateNetworkTargets { get; set; } = DefaultAllowPrivateNetworkTargets;
+
+    /// <summary>Default for <see cref="AllowPrivateNetworkTargets"/>.</summary>
+    public const bool DefaultAllowPrivateNetworkTargets = true;
+
+    /// <summary>
     /// Gets or sets the per-user playback policies. A user without an entry here inherits the
     /// global policy; a user entry always wins over the global one. An entry whose
     /// <see cref="UserPlaybackPolicy.Mode"/> cannot be parsed is ignored (the user falls back to

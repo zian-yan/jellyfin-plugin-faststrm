@@ -112,6 +112,16 @@ export default function (view) {
             zhHant: '預設 10 秒，範圍 1–60。先送 HEAD 請求，失敗再改用 1 位元組的 Range 請求。',
             en: 'Default 10 seconds, range 1-60. Sends a HEAD request first and falls back to a one-byte ranged GET.'
         },
+        'config.allowPrivateNetworkTargets': {
+            zh: '允许请求内网地址',
+            zhHant: '允許請求內網位址',
+            en: 'Allow requests to private network addresses'
+        },
+        'config.allowPrivateNetworkTargetsDesc': {
+            zh: '默认开启（局域网 Emby / Alist / OpenList 需要）。关闭后只允许请求公网地址；链路本地地址（含 169.254.169.254 云元数据端点）无论如何都会被拒绝。',
+            zhHant: '預設開啟（區域網路 Emby / Alist / OpenList 需要）。關閉後只允許請求公網位址；連結本地位址（含 169.254.169.254 雲端中繼資料端點）無論如何都會被拒絕。',
+            en: 'On by default (a LAN Emby / Alist / OpenList origin needs it). When off, only public addresses are requested; link-local addresses, including the 169.254.169.254 cloud metadata endpoint, are always refused.'
+        },
         'config.skipUnprobed': {
             zh: '未探测的 STRM 文件也跳过探测',
             zhHant: '未探測的 STRM 檔案也跳過探測',
@@ -361,6 +371,8 @@ export default function (view) {
     var chkEnableRemoteSize = view.querySelector('#chkEnableRemoteSize');
     var txtRemoteSizeTimeout = view.querySelector('#txtRemoteSizeTimeout');
     var remoteSizeTimeoutContainer = view.querySelector('#remoteSizeTimeoutContainer');
+    var chkAllowPrivateNetworkTargets = view.querySelector('#chkAllowPrivateNetworkTargets');
+    var allowPrivateNetworkTargetsContainer = view.querySelector('#allowPrivateNetworkTargetsContainer');
     var chkSkipProbeForUnprobed = view.querySelector('#chkSkipProbeForUnprobedStrm');
     var selectUnprobedPlaybackMode = view.querySelector('#selectUnprobedPlaybackMode');
     var txtBackgroundProbeDelay = view.querySelector('#txtBackgroundProbeDelay');
@@ -433,6 +445,13 @@ export default function (view) {
         var enabled = chkEnableRemoteSize.checked;
         txtRemoteSizeTimeout.disabled = !enabled;
         remoteSizeTimeoutContainer.style.opacity = enabled ? '1' : '0.5';
+        // 流地址白名单只在会发起请求时才有意义。
+        if (chkAllowPrivateNetworkTargets) {
+            chkAllowPrivateNetworkTargets.disabled = !enabled;
+        }
+        if (allowPrivateNetworkTargetsContainer) {
+            allowPrivateNetworkTargetsContainer.style.opacity = enabled ? '1' : '0.5';
+        }
     }
 
     function policyKey(userId) {
@@ -726,6 +745,10 @@ export default function (view) {
             // 默认开启：旧配置文件没有该字段时同样补全远端文件大小
             chkEnableRemoteSize.checked = config.EnableRemoteSize !== false;
             txtRemoteSizeTimeout.value = clampRemoteSizeTimeout(config.RemoteSizeTimeoutSeconds);
+            // 默认允许内网目标：旧配置文件没有该字段时保持既有行为（局域网媒体服务器）
+            if (chkAllowPrivateNetworkTargets) {
+                chkAllowPrivateNetworkTargets.checked = config.AllowPrivateNetworkTargets !== false;
+            }
             updateRemoteSizeState();
             chkSkipProbeForUnprobed.checked = config.SkipProbeForUnprobedStrm !== false;
             // 默认不补探测：旧配置文件中没有该字段时按“直接起播，不补探测”处理
@@ -840,6 +863,9 @@ export default function (view) {
             config.MaxConcurrentProbes = clampConcurrency(txtProbeConcurrency.value);
             config.EnableRemoteSize = chkEnableRemoteSize.checked;
             config.RemoteSizeTimeoutSeconds = clampRemoteSizeTimeout(txtRemoteSizeTimeout.value);
+            if (chkAllowPrivateNetworkTargets) {
+                config.AllowPrivateNetworkTargets = chkAllowPrivateNetworkTargets.checked;
+            }
             config.UserPolicies = collectUserPolicies();
             txtBackgroundProbeDelay.value = config.BackgroundProbeDelaySeconds;
             txtProbeConcurrency.value = config.MaxConcurrentProbes;
