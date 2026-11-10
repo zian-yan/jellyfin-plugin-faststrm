@@ -139,13 +139,16 @@ Jellyfin 探测 `.strm` 时，探测对象是本地那个**文本文件**本身�
 2. 源站不支持 `HEAD`（405/501）或没给长度时，退回 `Range: bytes=0-0` 的 `GET`，从 `Content-Range` 里取总长度；
 3. 拿到的大小写回条目（只覆盖 `< 1 MiB` 的记录，绝不覆盖已有的真实大小）。
 
-补全时机：
+补全时机（补全动作已并入各探测流程，没有单独的「仅补大小」模式）：
 
 | 场景 | 说明 |
 | :--- | :--- |
-| 增量 / 全量 / 入库自动 / 起播补探测 | 每次探测结束后顺带写入，不再额外请求内容 |
-| 浏览条目详情、开始播放 | 命中缓存直接替换显示，未命中则后台补一次（不阻塞响应） |
-| 手动补全 | 控制台选择 **仅补全文件大小** 启动，或 `POST /FastStrm/Probe/Start?mode=SizeOnly`（完全不走 ffprobe） |
+| 增量探测 | 没有流信息的条目在 ffprobe 后写入；已有流信息、但大小仍是 `.strm` 文本大小的条目只补大小（不跑 ffprobe） |
+| 全量探测 | 全部条目重新解析并覆盖已有大小 |
+| 入库自动探测 | 新条目没有流信息时探测后写入；库里已有流信息的新条目（扫描已探测过）只补大小，不重复跑 ffprobe |
+| 后台补探测（起播后） | 探测结束后顺带写入，不再额外请求内容 |
+| 浏览条目详情、开始播放 | 命中缓存直接替换显示，未命中则后台补一次（不阻塞响应；仅「跳过探测 · 后台补探测」策略） |
+| 手动补全 | 控制台启动 **增量探测**（补齐缺大小的条目）或 **全量探测**（全部重写），等价于 `POST /FastStrm/Probe/Start?mode=Incremental\|Full` |
 
 控制台统计新增 **缺少文件大小**，显示仍是 `.strm` 文件大小的条目数；请求超时默认 10 秒（1–60）。
 
@@ -190,7 +193,7 @@ dotnet build Jellyfin.Plugin.FastSTRM/Jellyfin.Plugin.FastSTRM.csproj -c Release
 | `GET` | `/FastStrm/Summary` | 统计概览与当前全局策略 |
 | `GET` | `/FastStrm/PlaybackPolicy` | 全局策略 + 每个用户的生效策略与来源（`?userId=` 只查一个用户） |
 | `GET` | `/FastStrm/PlaybackPolicy/Effective` | 单个用户的生效策略；不带 `userId` 返回全局策略 |
-| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | 启动探测（`Incremental` / `Full` / `SizeOnly`） |
+| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | 启动探测（`Incremental` / `Full`，旧值 `SizeOnly` 已移除并被拒绝） |
 | `POST` | `/FastStrm/Probe/Stop` | 停止探测 |
 | `GET` | `/FastStrm/Probe/Status` | 任务状态、进度与当前文件 |
 

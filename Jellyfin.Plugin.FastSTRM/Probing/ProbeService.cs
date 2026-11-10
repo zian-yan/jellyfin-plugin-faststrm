@@ -297,7 +297,16 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         var item = e.Item;
-        if (!IsStrmItem(item) || HasStreamInfo(item))
+        if (!IsStrmItem(item))
+        {
+            return;
+        }
+
+        // 入库自动探测同时承担远端大小补全：库扫描往往已经给新条目写入了流信息，
+        // 但大小仍是那个几百字节的 .strm 文本文件，这类条目不能因为「已有流信息」被整条丢掉。
+        var needsProbe = !HasStreamInfo(item);
+        var needsSize = RemoteSizeService.NeedsRemoteSize(item) && config.EnableRemoteSize;
+        if (!needsProbe && !needsSize)
         {
             return;
         }
@@ -352,8 +361,20 @@ public sealed class ProbeService : IHostedService, IDisposable
             // rest wait here (and are cancellable on shutdown).
             gate = await AcquireProbeSlotAsync(cancellationToken).ConfigureAwait(false);
 
-            _logger.LogInformation("FastSTRM: Auto-probing new item {Name}", LogSafe.Name(item, MaxLoggedNameLength));
-            await ProbeItemAsync(item, cancellationToken).ConfigureAwait(false);
+            if (HasStreamInfo(item))
+            {
+                // 只有大小还停在 .strm 文本文件：只补大小，不重跑 ffprobe。
+                _logger.LogDebug(
+                    "FastSTRM: Filling in the remote size of new item {Name}",
+                    LogSafe.Name(item, MaxLoggedNameLength));
+                await FillRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // ProbeItemAsync 在官方探测之后顺带补写远端大小。
+                _logger.LogInformation("FastSTRM: Auto-probing new item {Name}", LogSafe.Name(item, MaxLoggedNameLength));
+                await ProbeItemAsync(item, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -495,17 +516,18 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     // ── Public API ──
 
-    /// <summary>Incremental probe mode: only items without stream info.</summary>
+    /// <summary>
+    /// Incremental probe mode: items without stream info are fully probed, and items that already
+    /// have stream info but still carry the size of the .strm text file only get their remote size
+    /// filled in (no ffprobe).
+    /// </summary>
     public const string IncrementalMode = "Incremental";
 
-    /// <summary>Full probe mode: every .strm item.</summary>
-    public const string FullMode = "Full";
-
     /// <summary>
-    /// Size-only mode: no ffprobe at all, only the real (remote) file size of every .strm item
-    /// whose stored size is still the size of the .strm text file.
+    /// Full probe mode: every .strm item, every field refreshed — including the remote size, which
+    /// is re-resolved even when a plausible one is already stored.
     /// </summary>
-    public const string SizeOnlyMode = "SizeOnly";
+    public const string FullMode = "Full";
 
     /// <summary>
     /// Normalizes a probe mode. Unknown values are rejected instead of silently falling back to
@@ -517,12 +539,6 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         if (string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase))
         {
-            return true;
-        }
-
-        if (string.Equals(mode, SizeOnlyMode, StringComparison.OrdinalIgnoreCase))
-        {
-            normalized = SizeOnlyMode;
             return true;
         }
 
@@ -573,7 +589,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>
     /// Starts a probe task. Returns false if one is already running or still stopping.
     /// </summary>
-    /// <param name="mode">"Incremental" or "Full".</param>
+    /// <param name="mode">
+    /// <see cref="IncrementalMode"/> (unprobed items + items missing the remote size) or
+    /// <see cref="FullMode"/> (every item, every field).
+    /// </param>
     public bool StartProbe(string mode)
     {
         if (!TryParseMode(mode, out var normalizedMode))
@@ -864,24 +883,22 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         try
         {
-            // The library scan stays off the caller's lock: on a large library it takes seconds
-            // and would otherwise block StopProbe and this task's own finally block.
-            var sizeOnly = string.Equals(mode, SizeOnlyMode, StringComparison.OrdinalIgnoreCase);
-
             // Full mode is a complete refresh: every field is replaced with freshly probed data,
             // so the remote size is re-resolved even when a plausible one is already stored.
-            var forceRemoteSize = !sizeOnly
-                                  && string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase);
+            var forceRemoteSize = string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase);
+            var incremental = !forceRemoteSize;
 
+            // The library scan stays off the caller's lock: on a large library it takes seconds
+            // and would otherwise block StopProbe and this task's own finally block.
             var items = GetStrmItems();
-            if (sizeOnly)
+            if (incremental)
             {
-                // No ffprobe in this mode: only items still carrying the .strm file size.
-                items = items.Where(RemoteSizeService.NeedsRemoteSize).ToList();
-            }
-            else if (string.Equals(mode, IncrementalMode, StringComparison.OrdinalIgnoreCase))
-            {
-                items = items.Where(i => !HasStreamInfo(i)).ToList();
+                // 远端大小补全已并入增量探测，不再有单独的模式：
+                // 没有流信息的条目要跑 ffprobe，已有流信息但大小仍是 .strm 文本大小的条目
+                // 只补大小。否则这类条目在「官方探测 / 不补探测」策略下永远补不上。
+                items = items
+                    .Where(item => !HasStreamInfo(item) || RemoteSizeService.NeedsRemoteSize(item))
+                    .ToList();
             }
 
             lock (_lock)
@@ -915,8 +932,9 @@ public sealed class ProbeService : IHostedService, IDisposable
                     CurrentItemName = name;
                     LogProgress(index, total, name);
 
-                    if (sizeOnly)
+                    if (incremental && HasStreamInfo(item))
                     {
+                        // 已有流信息，只是大小还停在 .strm 文本文件：只补大小，不重跑 ffprobe。
                         await FillRemoteSizeAsync(item, token).ConfigureAwait(false);
                     }
                     else

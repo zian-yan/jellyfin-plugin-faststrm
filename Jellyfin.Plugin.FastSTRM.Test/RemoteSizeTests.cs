@@ -80,11 +80,12 @@ public class RemoteSizeTests
     }
 
     [Theory]
-    [InlineData("SizeOnly", ProbeService.SizeOnlyMode)]
-    [InlineData("sizeonly", ProbeService.SizeOnlyMode)]
     [InlineData("Full", ProbeService.FullMode)]
+    [InlineData("full", ProbeService.FullMode)]
     [InlineData("Incremental", ProbeService.IncrementalMode)]
-    public void TryParseMode_AcceptsKnownModes(string mode, string expected)
+    [InlineData("incremental", ProbeService.IncrementalMode)]
+    [InlineData(null, ProbeService.IncrementalMode)]
+    public void TryParseMode_AcceptsKnownModes(string? mode, string expected)
     {
         Assert.True(ProbeService.TryParseMode(mode, out var normalized));
         Assert.Equal(expected, normalized);
@@ -94,6 +95,15 @@ public class RemoteSizeTests
     public void TryParseMode_RejectsUnknownMode()
     {
         Assert.False(ProbeService.TryParseMode("SizeOnlyy", out var normalized));
+        Assert.Equal(ProbeService.IncrementalMode, normalized);
+    }
+
+    [Fact]
+    public void TryParseMode_RejectsRemovedSizeOnlyMode()
+    {
+        // 「仅补全文件大小」已并入增量探测，旧脚本再传该值时必须被拒绝，
+        // 而不是静默落到某个模式上。
+        Assert.False(ProbeService.TryParseMode("SizeOnly", out var normalized));
         Assert.Equal(ProbeService.IncrementalMode, normalized);
     }
 }

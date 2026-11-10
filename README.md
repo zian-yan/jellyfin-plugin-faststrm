@@ -140,13 +140,16 @@ With **Dashboard → Plugins → FastSTRM → Fill in the remote file size** ena
 2. If the endpoint rejects `HEAD` (405/501) or omits the length, it falls back to a one-byte ranged `GET` and reads the total from `Content-Range`;
 3. The resolved size is written back onto the item (only records below `< 1 MiB` are replaced — a plausible size is never overwritten).
 
-When it runs:
+Filling in is part of every probe flow — there is no separate "size only" mode any more:
 
 | Scenario | Behaviour |
 | :--- | :--- |
-| Incremental / full / on-import / post-start probe | Filled in right after each probe, with no extra content request |
-| Opening item details, starting playback | Served from cache when known, otherwise resolved in the background without delaying the response |
-| Manual | Pick **File size only** in the dashboard, or `POST /FastStrm/Probe/Start?mode=SizeOnly` (no ffprobe at all) |
+| Incremental probe | Unprobed items are filled in after their ffprobe; items that already have stream info but still carry the `.strm` text size only get the size resolved (no ffprobe) |
+| Full probe | Every item is re-resolved, overwriting any stored size |
+| Auto-probe on import | Unprobed new items are filled in after their ffprobe; items the scan already probed only get the size resolved, without a second ffprobe |
+| Post-start background probe | Filled in right after the probe, with no extra content request |
+| Opening item details, starting playback | Served from cache when known, otherwise resolved in the background without delaying the response (only under the "skip probe + background probe" policy) |
+| Manual | Run **Incremental** (fills the items still missing a size) or **Full** (rewrites everything) in the dashboard, i.e. `POST /FastStrm/Probe/Start?mode=Incremental\|Full` |
 
 The dashboard gains a **Missing file size** counter; the request timeout defaults to 10 seconds (1–60).
 
@@ -191,7 +194,7 @@ Requires an admin token or an authenticated session.
 | `GET` | `/FastStrm/Summary` | Summary statistics and the current global policy |
 | `GET` | `/FastStrm/PlaybackPolicy` | Global policy plus every user's effective policy and its source (`?userId=` limits to one user) |
 | `GET` | `/FastStrm/PlaybackPolicy/Effective` | Effective policy for a single user; without `userId` returns the global policy |
-| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | Start probing (`Incremental` / `Full` / `SizeOnly`) |
+| `POST` | `/FastStrm/Probe/Start?mode=Incremental` | Start probing (`Incremental` / `Full`; the old `SizeOnly` value was removed and is rejected) |
 | `POST` | `/FastStrm/Probe/Stop` | Stop probing |
 | `GET` | `/FastStrm/Probe/Status` | Task state, progress and current file |
 

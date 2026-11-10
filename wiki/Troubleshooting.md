@@ -69,8 +69,10 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 插件默认补全远端大小（可在配置页关闭）：
 
 1. 确认配置页 **补全远端文件大小** 已开启（默认开）；
-2. 想要一次批量修好历史条目：模式选 **仅补全文件大小** 启动，或 `POST /FastStrm/Probe/Start?mode=SizeOnly`（只发请求头，不跑 ffprobe、不下载内容）；
+2. 想要一次批量修好历史条目：控制台启动 **增量探测**（只对缺大小的条目发头部请求，已有流信息的条目不重跑 ffprobe），等价于 `POST /FastStrm/Probe/Start?mode=Incremental`；需要全部覆盖时用 **全量探测**（`mode=Full`）；
 3. 控制台「缺少文件大小」计数应随之下降。
+
+> 3.6.0 起补全动作并入后台补探测、增量探测与全量探测，独立的「仅补全文件大小」模式（`mode=SizeOnly`）已移除，旧调用会被拒绝。
 
 仍是旧值的常见原因：
 
@@ -78,7 +80,7 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 | :--- | :--- | :--- |
 | 计数不下降，日志无 `Wrote the remote size` | 源站不返回 `Content-Length`，且 `Range` 请求被拒 | 换支持长度查询的直链；插件只做一次头部请求，不会下载内容探测 |
 | 部分条目正常、部分不动 | 这些 `.strm` 里不是 `http(s)` 绝对地址，或文件为空/多行异常 | 检查 `.strm` 内容：第一行非空且非 `#` 的行必须是完整 URL |
-| 刚补全又变回几百字节 | 库扫描重写了 `.strm` 的文件信息 | 下次播放或浏览详情时会再次自动补全；也可再跑一次「仅补全文件大小」 |
+| 刚补全又变回几百字节 | 库扫描重写了 `.strm` 的文件信息 | 下次播放或浏览详情时会再次自动补全；也可再跑一次「增量探测」（只补缺大小的条目） |
 | 日志 `timed out` / `failed` | 源站响应慢或需要鉴权 | 调大「大小请求超时」（最大 60 秒）；失败条目 10 分钟内不会重复请求 |
 
 > 少于 1 MiB 的记录才会被替换，已有真实大小不会被覆盖。

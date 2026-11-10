@@ -131,8 +131,8 @@ public class FastStrmController : ControllerBase
         {
             return BadRequest(new
             {
-                Message = $"Unsupported mode '{mode}'. Use '{ProbeService.IncrementalMode}', "
-                          + $"'{ProbeService.FullMode}' or '{ProbeService.SizeOnlyMode}'."
+                Message = $"Unsupported mode '{mode}'. Use '{ProbeService.IncrementalMode}' "
+                          + $"or '{ProbeService.FullMode}'."
             });
         }
 
