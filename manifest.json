@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.1.0",
+        "changelog": "### 变更\n\n- 移除配置页「补全远端文件大小」开关：该功能固定启用，配置页只保留请求超时与内网地址选项。\n- 配置页移除所有选项说明文字，只保留标签与控件。\n- 浏览条目详情不再触发大小补全：无论何种播放策略，详情页都只读进程内缓存、不发任何流地址请求；补全只在入库自动探测、后台补探测、增量探测与全量探测中发生。\n\n### 移除\n\n- `/FastStrm/Summary` 不再返回 `EnableRemoteSize` 字段；旧配置文件里的同名键在下次保存时自动消失。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.1/FastSTRM.zip",
+        "checksum": "6af878ae4147bcafbcd26e12a8d9276c",
+        "timestamp": "2026-11-10T05:58:56Z"
+      },
+      {
         "version": "3.6.0.0",
         "changelog": "### 变更\n\n- 补全远端文件大小并入入库自动探测、后台补探测、增量探测与全量探测：探测结束即写入，不再有独立入口。\n- 移除「仅补全文件大小」探测模式与 `mode=SizeOnly` 接口值，再传该值会被拒绝（400）。\n- 增量探测顺带补齐「已有流信息、但大小仍是 `.strm` 文本大小」的条目：只发头部请求，不重跑 ffprobe。\n- 入库自动探测同样覆盖这类条目：库扫描已探测过的 `.strm` 不再被「已有流信息」整条跳过，只补大小。\n\n### 修复\n\n- 这类条目此前在「官方探测 / 不补探测」策略下永远不会被补全，控制台「缺少文件大小」计数无法清零。\n\n---",
         "targetAbi": "12.0.0.0",
