@@ -290,8 +290,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        var config = Plugin.Instance?.Configuration;
-        if (config is not { EnableAutoProbe: true })
+        if (Plugin.Instance?.Configuration is not { EnableAutoProbe: true })
         {
             return;
         }
@@ -305,7 +304,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         // 入库自动探测同时承担远端大小补全：库扫描往往已经给新条目写入了流信息，
         // 但大小仍是那个几百字节的 .strm 文本文件，这类条目不能因为「已有流信息」被整条丢掉。
         var needsProbe = !HasStreamInfo(item);
-        var needsSize = RemoteSizeService.NeedsRemoteSize(item) && config.EnableRemoteSize;
+        var needsSize = RemoteSizeService.NeedsRemoteSize(item);
         if (!needsProbe && !needsSize)
         {
             return;

@@ -104,24 +104,14 @@ public class PluginConfiguration : BasePluginConfiguration
     public int MaxConcurrentProbes { get; set; } = 1;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the real size of the remote file should be
-    /// resolved and stored on the .strm item. Default <c>true</c>.
-    /// </summary>
-    /// <remarks>
-    /// Jellyfin probes the .strm container, so the stored size is the size of the local .strm text
-    /// file (a few hundred bytes). When enabled, the plugin asks the stream endpoint for the real
-    /// length (HTTP HEAD, falling back to a one-byte ranged GET) and writes it onto the item, so
-    /// the media info shows the actual file size.
-    /// </remarks>
-    public bool EnableRemoteSize { get; set; } = DefaultEnableRemoteSize;
-
-    /// <summary>Default for <see cref="EnableRemoteSize"/>.</summary>
-    public const bool DefaultEnableRemoteSize = true;
-
-    /// <summary>
     /// Gets or sets the timeout, in seconds, of a single remote size request.
     /// Default 10 seconds, clamped to 1–60.
     /// </summary>
+    /// <remarks>
+    /// 补全远端文件大小不再有开关（3.6.1 起固定启用）：Jellyfin 探测 .strm 时只能拿到那个
+    /// 几百字节文本文件的大小，因此入库自动探测、后台补探测、增量探测与全量探测都会在探测
+    /// 结束后向流地址补一次真实长度。这里只剩请求超时可调。
+    /// </remarks>
     public int RemoteSizeTimeoutSeconds { get; set; } = DefaultRemoteSizeTimeoutSeconds;
 
     /// <summary>

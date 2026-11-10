@@ -134,7 +134,7 @@ Details, fallback matrix and API examples: see the Wiki —
 
 When Jellyfin probes a `.strm` item it probes the **local text file**, so the stored "file size" — and therefore the size shown on the media info page — is the size of that few-hundred-byte `.strm` file. ffprobe cannot supply the real size either (HTTP streams usually report `size=N/A`).
 
-With **Dashboard → Plugins → FastSTRM → Fill in the remote file size** enabled (the default):
+The plugin **always fills in the remote size** (no toggle since 3.6.1 — the dashboard only keeps the request timeout):
 
 1. The plugin reads the stream URL out of the `.strm` file and sends a `HEAD` request for `Content-Length`;
 2. If the endpoint rejects `HEAD` (405/501) or omits the length, it falls back to a one-byte ranged `GET` and reads the total from `Content-Range`;
@@ -148,7 +148,8 @@ Filling in is part of every probe flow — there is no separate "size only" mode
 | Full probe | Every item is re-resolved, overwriting any stored size |
 | Auto-probe on import | Unprobed new items are filled in after their ffprobe; items the scan already probed only get the size resolved, without a second ffprobe |
 | Post-start background probe | Filled in right after the probe, with no extra content request |
-| Opening item details, starting playback | Served from cache when known, otherwise resolved in the background without delaying the response (only under the "skip probe + background probe" policy) |
+| Opening item details | **Cache read only, no request**: the details page never triggers a size lookup, whatever the playback policy is |
+| Starting playback | Only under "skip probe + background probe": served from cache when known, otherwise resolved in the background without delaying the start |
 | Manual | Run **Incremental** (fills the items still missing a size) or **Full** (rewrites everything) in the dashboard, i.e. `POST /FastStrm/Probe/Start?mode=Incremental\|Full` |
 
 The dashboard gains a **Missing file size** counter; the request timeout defaults to 10 seconds (1–60).

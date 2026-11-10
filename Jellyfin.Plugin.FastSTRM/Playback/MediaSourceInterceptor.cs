@@ -80,8 +80,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     ///    a configuration change applies to the next playback without a restart.
     ///    With "skip probe" the item starts instantly and a background probe is scheduled only if
     ///    the policy asks for it, after the policy's delay (default: no background probe).
-    /// 4. 远端文件大小补全同样受策略约束：只有「跳过探测 · 后台补探测」才会读取并向流地址请求大小。
-    ///    「官方探测」与「不补探测」都不发这次请求（浏览详情页同理）。
+    /// 4. 远端文件大小补全同样受策略约束：起播路径只有「跳过探测 · 后台补探测」才会读取并向流地址
+    ///    请求大小，「官方探测」与「不补探测」都不发这次请求。
+    ///    浏览详情页（<see cref="GetStaticMediaSources"/>）无论何种模式都只读缓存、不发请求。
     /// </summary>
     public async Task<IReadOnlyList<MediaSourceInfo>> GetPlaybackMediaSources(
         BaseItem item,
@@ -255,16 +256,31 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     /// local .strm text file until the value is written to the database.
     /// </summary>
     /// <remarks>
-    /// 与取源链路同一套策略约束：只有「跳过探测 · 后台补探测」的用户浏览详情时才补大小，
-    /// 否则打开一次媒体信息页就会产生一次流地址请求，等于绕过了「不补探测 / 官方探测」的选择。
+    /// 浏览详情页**只读进程内缓存，绝不发请求、绝不排队补全**：无论播放策略是什么，
+    /// 打开一次媒体信息页都不该产生一次流地址请求。缓存未命中时保持数据库里的现值，
+    /// 真正的补全只由探测流程（入库自动 / 后台补探测 / 增量 / 全量）承担。
     /// </remarks>
     public IReadOnlyList<MediaSourceInfo> GetStaticMediaSources(BaseItem item, bool enablePathSubstitution, User user = null)
     {
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
 
-        if (IsStrmItem(item) && _policyResolver.Resolve(user?.Id).ShouldProbeInBackground)
+        if (!IsStrmItem(item) || sources is null || sources.Count == 0)
         {
-            _remoteSize.ApplyToSources(item, sources);
+            return sources;
+        }
+
+        var size = _remoteSize.TryGetCachedSize(item.Id);
+        if (size is not long known)
+        {
+            return sources;
+        }
+
+        foreach (var source in sources)
+        {
+            if (source.Size != known)
+            {
+                source.Size = known;
+            }
         }
 
         return sources;

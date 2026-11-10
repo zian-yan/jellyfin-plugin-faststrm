@@ -59,12 +59,13 @@ public class RemoteSizeTests
     }
 
     [Fact]
-    public void RemoteSize_IsEnabledByDefault()
+    public void RemoteSize_UsesDefaultTimeout()
     {
+        // 补全远端文件大小已无开关（3.6.1 起固定启用），只剩请求超时可配。
         var configuration = new PluginConfiguration();
 
-        Assert.True(configuration.EnableRemoteSize);
         Assert.Equal(PluginConfiguration.DefaultRemoteSizeTimeoutSeconds, configuration.GetRemoteSizeTimeoutSeconds());
+        Assert.Null(typeof(PluginConfiguration).GetProperty("EnableRemoteSize"));
     }
 
     [Theory]

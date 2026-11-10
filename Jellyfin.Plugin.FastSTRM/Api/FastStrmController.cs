@@ -57,7 +57,6 @@ public class FastStrmController : ControllerBase
             EnableBackgroundProbeForUnprobedStrm = global.EnableBackgroundProbe,
             BackgroundProbeDelaySeconds = global.BackgroundProbeDelaySeconds,
             CancelBackgroundProbeOnPlaybackStop = global.CancelBackgroundProbeOnPlaybackStop,
-            EnableRemoteSize = configuration.EnableRemoteSize,
             RemoteSizeTimeoutSeconds = configuration.GetRemoteSizeTimeoutSeconds(),
             AllowPrivateNetworkTargets = configuration.AllowPrivateNetworkTargets
         });

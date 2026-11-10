@@ -96,34 +96,20 @@
                 <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="txtProbeConcurrency" data-i18n="config.concurrency">探测并发数</label>
                     <input is="emby-input" type="number" id="txtProbeConcurrency" min="1" max="16" step="1" value="1" />
-                    <div class="fieldDescription" data-i18n="config.concurrencyDesc">
-                        增量探测、全量探测、入库自动探测与补探测统一使用该并发数，默认 1，范围 1–16。
-                    </div>
                 </div>
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
-                    <label>
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableRemoteSize" />
-                        <span data-i18n="config.remoteSize">补全远端文件大小</span>
-                    </label>
+                <div style="margin-bottom: 0.2em;">
+                    <span style="font-weight: 600;" data-i18n="config.remoteSize">补全远端文件大小</span>
+                    <span style="color: #888; font-size: 0.85em;" data-i18n="config.remoteSizeAlwaysOn">（始终启用）</span>
                 </div>
-                <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.remoteSizeDesc">
-                    Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。补全已并入入库自动探测、后台补探测、增量探测与全量探测：只请求仍缺少大小的条目，已有真实大小不会被覆盖（全量探测除外）；「官方探测」与「不补探测」策略下，起播与浏览详情不会发起该请求。
-                </div>
-                <div class="inputContainer" id="remoteSizeTimeoutContainer">
+                <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="txtRemoteSizeTimeout" data-i18n="config.remoteSizeTimeout">大小请求超时（秒）</label>
                     <input is="emby-input" type="number" id="txtRemoteSizeTimeout" min="1" max="60" step="1" value="10" />
-                    <div class="fieldDescription" data-i18n="config.remoteSizeTimeoutDesc">
-                        默认 10 秒，范围 1–60。先发 HEAD 请求，失败再退回 1 字节的 Range 请求。
-                    </div>
                 </div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox" id="allowPrivateNetworkTargetsContainer">
                     <label>
                         <input is="emby-checkbox" type="checkbox" id="chkAllowPrivateNetworkTargets" />
                         <span data-i18n="config.allowPrivateNetworkTargets">允许请求内网地址</span>
                     </label>
-                </div>
-                <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.allowPrivateNetworkTargetsDesc">
-                    默认开启（局域网 Emby / Alist / OpenList 需要）。关闭后只允许请求公网地址；链路本地地址（含 169.254.169.254 云元数据端点）无论如何都会被拒绝。
                 </div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
                     <label>
@@ -137,9 +123,6 @@
                         <span data-i18n="config.skipUnprobed">未探测的 STRM 文件也跳过探测</span>
                     </label>
                 </div>
-                <div class="fieldDescription" style="margin-top: -0.4em; margin-bottom: 1em;" data-i18n="config.skipUnprobedDesc">
-                    开启：跳过 ffprobe 直接起播；关闭：回退官方探测。
-                </div>
 
                 <div id="unprobedPlaybackOptions" style="margin-left: 1.7em; margin-bottom: 1em;">
                     <div class="selectContainer">
@@ -148,17 +131,11 @@
                             <option value="None" data-i18n="config.afterStart.none">不补探测（默认）</option>
                             <option value="Background" data-i18n="config.afterStart.background">后台补探测</option>
                         </select>
-                        <div class="fieldDescription" data-i18n="config.afterStartDesc">
-                            仅在开关开启时生效；不补探测不会再次请求流地址。
-                        </div>
                     </div>
 
                     <div class="inputContainer" id="backgroundProbeDelayContainer">
                         <label class="inputLabel inputLabelUnfocused" for="txtBackgroundProbeDelay" data-i18n="config.backgroundDelay">补探测延迟（秒）</label>
                         <input is="emby-input" type="number" id="txtBackgroundProbeDelay" min="0" max="3600" step="1" value="5" />
-                        <div class="fieldDescription" data-i18n="config.backgroundDelayDesc">
-                            默认 5 秒，范围 0–3600。
-                        </div>
                     </div>
 
                     <div id="cancelProbeOnStopContainer">
@@ -168,9 +145,6 @@
                                 <span data-i18n="config.cancelOnStop">播放停止后取消补探测</span>
                             </label>
                         </div>
-                        <div class="fieldDescription" style="margin-top: -0.4em;" data-i18n="config.cancelOnStopDesc">
-                            默认开启；关闭后播放停止仍会继续补探测。
-                        </div>
                     </div>
                 </div>
 
@@ -179,11 +153,6 @@
                     <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 1em; flex-wrap: wrap;">
                         <h3 style="margin: 0; font-size: 1.05em; font-weight: 600;" data-i18n="userPolicy.title">按用户播放策略</h3>
                         <span id="lblUserPolicySummary" style="font-size: 0.8em; color: #888;">-</span>
-                    </div>
-
-                    <div class="fieldDescription" style="margin-top: 0.5em;" data-i18n="userPolicy.desc">
-                        用户级配置优先于上方全局配置；未在此列出的用户继承全局策略。
-                        策略在每次播放请求时读取，保存后对下一次播放生效，不影响正在播放的会话。
                     </div>
 
                     <div id="userPolicyEmpty" style="margin-top: 0.9em; font-size: 0.85em; color: #777;" data-i18n="userPolicy.empty">
@@ -216,9 +185,6 @@
                         </div>
                     </div>
 
-                    <div class="fieldDescription" style="margin-top: 0.6em;" data-i18n="userPolicy.footerDesc">
-                        延迟留空表示沿用全局延迟。保存时「继承全局」的用户不会写入配置文件。
-                    </div>
                 </div>
 
                 <div>

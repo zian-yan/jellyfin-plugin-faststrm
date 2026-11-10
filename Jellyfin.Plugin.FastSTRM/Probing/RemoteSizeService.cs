@@ -150,11 +150,6 @@ public sealed class RemoteSizeService : IDisposable
     }
 
     /// <summary>
-    /// Gets a value indicating whether remote size resolution is enabled in the configuration.
-    /// </summary>
-    public bool Enabled => Plugin.Instance?.Configuration.EnableRemoteSize ?? true;
-
-    /// <summary>
     /// Gets a value indicating whether loopback/private stream targets are allowed. Read per
     /// connection (not cached) because the connect callback that enforces the target policy is
     /// shared by every request and a configuration change must apply without a restart.
@@ -216,7 +211,7 @@ public sealed class RemoteSizeService : IDisposable
     /// </summary>
     public void ApplyToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
-        if (sources is null || sources.Count == 0 || !Enabled)
+        if (sources is null || sources.Count == 0)
         {
             return;
         }
@@ -257,7 +252,6 @@ public sealed class RemoteSizeService : IDisposable
     public void Schedule(BaseItem item)
     {
         if (_disposed
-            || !Enabled
             || !IsStrmItem(item)
             || !NeedsRemoteSize(item))
         {
@@ -343,7 +337,7 @@ public sealed class RemoteSizeService : IDisposable
     /// </remarks>
     public async Task<long?> ResolveAsync(BaseItem item, CancellationToken cancellationToken, bool force = false)
     {
-        if (!Enabled || !IsStrmItem(item))
+        if (!IsStrmItem(item))
         {
             return null;
         }

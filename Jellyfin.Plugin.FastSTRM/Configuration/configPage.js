@@ -77,11 +77,6 @@ export default function (view) {
             zhHant: '探測併發數',
             en: 'Probe concurrency'
         },
-        'config.concurrencyDesc': {
-            zh: '增量探测、全量探测、入库自动探测与补探测统一使用该并发数，默认 1，范围 1–16。',
-            zhHant: '增量探測、全量探測、入庫自動探測與補探測皆使用此併發數，預設 1，範圍 1–16。',
-            en: 'Shared by incremental probing, full probing, auto-probe on import and re-probe. Default 1, range 1-16.'
-        },
         'config.autoProbe': {
             zh: 'Strm入库自动探测',
             zhHant: 'Strm 入庫自動探測',
@@ -92,40 +87,25 @@ export default function (view) {
             zhHant: '補齊遠端檔案大小',
             en: 'Fill in the remote file size'
         },
-        'config.remoteSizeDesc': {
-            zh: 'Jellyfin 探测 .strm 时只能拿到文本文件本身的大小，开启后会向流地址请求真实大小并写入条目。补全已并入入库自动探测、后台补探测、增量探测与全量探测：只请求仍缺少大小的条目，已有真实大小不会被覆盖（全量探测除外）；「官方探测」与「不补探测」策略下，起播与浏览详情不会发起该请求。',
-            zhHant: 'Jellyfin 探測 .strm 時只能取得文字檔本身的大小，開啟後會向串流位址請求真實大小並寫入項目。補齊已納入入庫自動探測、背景補探測、增量探測與全量探測：只請求仍缺少大小的項目，已有真實大小不會被覆蓋（全量探測除外）；「官方探測」與「不補探測」策略下，起播與瀏覽詳情不會送出此請求。',
-            en: 'Jellyfin only sees the size of the .strm text file. When on, the plugin asks the stream endpoint for the real size and stores it on the item. Size filling is part of the auto-probe on import, the background probe, the incremental probe and the full probe: only items still missing a size are requested, and an existing real size is never overwritten (except by a full probe). Under "official probe" or "skip probe, no background probe" nothing is requested on playback or item details.'
+        'config.remoteSizeAlwaysOn': {
+            zh: '（始终启用）',
+            zhHant: '（始終啟用）',
+            en: '(always on)'
         },
         'config.remoteSizeTimeout': {
             zh: '大小请求超时（秒）',
             zhHant: '大小請求逾時（秒）',
             en: 'Size request timeout (seconds)'
         },
-        'config.remoteSizeTimeoutDesc': {
-            zh: '默认 10 秒，范围 1–60。先发 HEAD 请求，失败再退回 1 字节的 Range 请求。',
-            zhHant: '預設 10 秒，範圍 1–60。先送 HEAD 請求，失敗再改用 1 位元組的 Range 請求。',
-            en: 'Default 10 seconds, range 1-60. Sends a HEAD request first and falls back to a one-byte ranged GET.'
-        },
         'config.allowPrivateNetworkTargets': {
             zh: '允许请求内网地址',
             zhHant: '允許請求內網位址',
             en: 'Allow requests to private network addresses'
         },
-        'config.allowPrivateNetworkTargetsDesc': {
-            zh: '默认开启（局域网 Emby / Alist / OpenList 需要）。关闭后只允许请求公网地址；链路本地地址（含 169.254.169.254 云元数据端点）无论如何都会被拒绝。',
-            zhHant: '預設開啟（區域網路 Emby / Alist / OpenList 需要）。關閉後只允許請求公網位址；連結本地位址（含 169.254.169.254 雲端中繼資料端點）無論如何都會被拒絕。',
-            en: 'On by default (a LAN Emby / Alist / OpenList origin needs it). When off, only public addresses are requested; link-local addresses, including the 169.254.169.254 cloud metadata endpoint, are always refused.'
-        },
         'config.skipUnprobed': {
             zh: '未探测的 STRM 文件也跳过探测',
             zhHant: '未探測的 STRM 檔案也跳過探測',
             en: 'Also skip probing for unprobed STRM files'
-        },
-        'config.skipUnprobedDesc': {
-            zh: '开启：跳过 ffprobe 直接起播；关闭：回退官方探测。',
-            zhHant: '開啟：跳過 ffprobe 直接起播；關閉：回退官方探測。',
-            en: 'On: skip ffprobe and start playback immediately. Off: fall back to official probing.'
         },
         'config.afterStartMode': {
             zh: '起播后策略',
@@ -142,40 +122,20 @@ export default function (view) {
             zhHant: '背景補探測',
             en: 'Re-probe in background'
         },
-        'config.afterStartDesc': {
-            zh: '仅在开关开启时生效；不补探测不会再次请求流地址。',
-            zhHant: '僅在開關開啟時生效；不補探測不會再次請求串流位址。',
-            en: 'Only applies while the switch above is on. No re-probe means the stream URL is never requested again.'
-        },
         'config.backgroundDelay': {
             zh: '补探测延迟（秒）',
             zhHant: '補探測延遲（秒）',
             en: 'Re-probe delay (seconds)'
-        },
-        'config.backgroundDelayDesc': {
-            zh: '默认 5 秒，范围 0–3600。',
-            zhHant: '預設 5 秒，範圍 0–3600。',
-            en: 'Default 5 seconds, range 0-3600.'
         },
         'config.cancelOnStop': {
             zh: '播放停止后取消补探测',
             zhHant: '播放停止後取消補探測',
             en: 'Cancel re-probe when playback stops'
         },
-        'config.cancelOnStopDesc': {
-            zh: '默认开启；关闭后播放停止仍会继续补探测。',
-            zhHant: '預設開啟；關閉後播放停止仍會繼續補探測。',
-            en: 'On by default. When off, the re-probe continues after playback stops.'
-        },
         'userPolicy.title': {
             zh: '按用户播放策略',
             zhHant: '依使用者播放策略',
             en: 'Per-user playback policy'
-        },
-        'userPolicy.desc': {
-            zh: '用户级配置优先于上方全局配置；未在此列出的用户继承全局策略。策略在每次播放请求时读取，保存后对下一次播放生效，不影响正在播放的会话。',
-            zhHant: '使用者層級設定優先於上方全域設定；未在此列出的使用者沿用全域策略。策略在每次播放請求時讀取，儲存後對下一次播放生效，不影響正在播放的工作階段。',
-            en: 'Per-user settings override the global settings above; users not listed here inherit the global policy. The policy is read on every playback request, so a save takes effect from the next playback and does not affect sessions already playing.'
         },
         'userPolicy.empty': {
             zh: '暂无用户级配置，所有用户继承全局策略。',
@@ -196,11 +156,6 @@ export default function (view) {
             zh: '添加',
             zhHant: '新增',
             en: 'Add'
-        },
-        'userPolicy.footerDesc': {
-            zh: '延迟留空表示沿用全局延迟。保存时「继承全局」的用户不会写入配置文件。',
-            zhHant: '延遲留空表示沿用全域延遲。儲存時「沿用全域」的使用者不會寫入設定檔。',
-            en: 'Leave the delay empty to use the global delay. Users set to “inherit global” are not written to the configuration file.'
         },
         'userPolicy.deletedUser': {
             zh: '已删除的用户 ({0})',
@@ -363,11 +318,8 @@ export default function (view) {
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
     var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
     var txtProbeConcurrency = view.querySelector('#txtProbeConcurrency');
-    var chkEnableRemoteSize = view.querySelector('#chkEnableRemoteSize');
     var txtRemoteSizeTimeout = view.querySelector('#txtRemoteSizeTimeout');
-    var remoteSizeTimeoutContainer = view.querySelector('#remoteSizeTimeoutContainer');
     var chkAllowPrivateNetworkTargets = view.querySelector('#chkAllowPrivateNetworkTargets');
-    var allowPrivateNetworkTargetsContainer = view.querySelector('#allowPrivateNetworkTargetsContainer');
     var chkSkipProbeForUnprobed = view.querySelector('#chkSkipProbeForUnprobedStrm');
     var selectUnprobedPlaybackMode = view.querySelector('#selectUnprobedPlaybackMode');
     var txtBackgroundProbeDelay = view.querySelector('#txtBackgroundProbeDelay');
@@ -433,20 +385,6 @@ export default function (view) {
             return 10;
         }
         return Math.min(60, Math.max(1, seconds));
-    }
-
-    // 关闭补全远端大小时，超时输入框没有意义：置灰但保留原值，避免用户以为是配置丢失。
-    function updateRemoteSizeState() {
-        var enabled = chkEnableRemoteSize.checked;
-        txtRemoteSizeTimeout.disabled = !enabled;
-        remoteSizeTimeoutContainer.style.opacity = enabled ? '1' : '0.5';
-        // 流地址白名单只在会发起请求时才有意义。
-        if (chkAllowPrivateNetworkTargets) {
-            chkAllowPrivateNetworkTargets.disabled = !enabled;
-        }
-        if (allowPrivateNetworkTargetsContainer) {
-            allowPrivateNetworkTargetsContainer.style.opacity = enabled ? '1' : '0.5';
-        }
     }
 
     function policyKey(userId) {
@@ -737,14 +675,11 @@ export default function (view) {
             chkAutoProbe.checked = config.EnableAutoProbe;
             // 默认值为 true：旧配置文件中没有该字段时也保持"跳过探测"的极速模式
             txtProbeConcurrency.value = clampConcurrency(config.MaxConcurrentProbes);
-            // 默认开启：旧配置文件没有该字段时同样补全远端文件大小
-            chkEnableRemoteSize.checked = config.EnableRemoteSize !== false;
             txtRemoteSizeTimeout.value = clampRemoteSizeTimeout(config.RemoteSizeTimeoutSeconds);
             // 默认允许内网目标：旧配置文件没有该字段时保持既有行为（局域网媒体服务器）
             if (chkAllowPrivateNetworkTargets) {
                 chkAllowPrivateNetworkTargets.checked = config.AllowPrivateNetworkTargets !== false;
             }
-            updateRemoteSizeState();
             chkSkipProbeForUnprobed.checked = config.SkipProbeForUnprobedStrm !== false;
             // 默认不补探测：旧配置文件中没有该字段时按“直接起播，不补探测”处理
             selectUnprobedPlaybackMode.value = config.EnableBackgroundProbeForUnprobedStrm === true
@@ -856,7 +791,6 @@ export default function (view) {
             config.BackgroundProbeDelaySeconds = clampDelaySeconds(txtBackgroundProbeDelay.value);
             config.CancelBackgroundProbeOnPlaybackStop = chkCancelProbeOnPlaybackStop.checked;
             config.MaxConcurrentProbes = clampConcurrency(txtProbeConcurrency.value);
-            config.EnableRemoteSize = chkEnableRemoteSize.checked;
             config.RemoteSizeTimeoutSeconds = clampRemoteSizeTimeout(txtRemoteSizeTimeout.value);
             if (chkAllowPrivateNetworkTargets) {
                 config.AllowPrivateNetworkTargets = chkAllowPrivateNetworkTargets.checked;
@@ -865,7 +799,6 @@ export default function (view) {
             txtBackgroundProbeDelay.value = config.BackgroundProbeDelaySeconds;
             txtProbeConcurrency.value = config.MaxConcurrentProbes;
             txtRemoteSizeTimeout.value = config.RemoteSizeTimeoutSeconds;
-            updateRemoteSizeState();
             ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
                 Dashboard.processPluginConfigurationUpdateResult();
 
@@ -881,7 +814,6 @@ export default function (view) {
 
     chkSkipProbeForUnprobed.addEventListener('change', updateUnprobedPlaybackState);
     selectUnprobedPlaybackMode.addEventListener('change', updateUnprobedPlaybackState);
-    chkEnableRemoteSize.addEventListener('change', updateRemoteSizeState);
 
     // ── Page lifecycle ──
 
@@ -898,7 +830,6 @@ export default function (view) {
         });
         updateUnprobedPlaybackState();
         updateAddRowState();
-        updateRemoteSizeState();
     });
 
     view.addEventListener('viewhide', function () {
