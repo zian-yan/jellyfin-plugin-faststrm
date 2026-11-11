@@ -300,13 +300,15 @@ public class RemoteSizeHttpTests
     public async Task Resolve_AllowedTriggerFillsMissingSize(RemoteSizeTrigger trigger)
     {
         // 四个允许场景（全量探测另有用例）：缺大小的条目必须真的发一次请求并拿到长度。
+        // 用 0 而不是 180 表示「缺大小」：180 这种「非零且不等于 .strm 文本长度、又小于 1 MiB」
+        // 的值会被 IsAlreadyResolved 当作已补全的短片，根本不会发请求（见 Resolve_SkipsAlreadyResolvedSmallSize）。
         var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
         using var service = CreateService(handler);
         var path = WriteStrm("http://93.184.216.34/movie.mkv\n");
         try
         {
             var size = await service.ResolveAsync(
-                new Video { Path = path, Size = 180 },
+                new Video { Path = path, Size = 0 },
                 trigger,
                 CancellationToken.None);
 
