@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修复已有流信息但大小仍是 `.strm` 文本大小的条目在「起播后补探测」下永远补不上的问题：旧代码遇到 `HasStreamInfo` 直接跳过整个后台补探测。
 - 「缺少文件大小」计数不再把 4 KiB–1 MiB 的短片、音乐视频等已写入的真实大小算作缺失。
 - 写库失败时回滚内存中的大小，避免缓存显示已补全、数据库仍是旧值且不再重试。
+- 补全远端大小失败时给出可见的 Warning 日志（源站无 `Content-Length`/`Content-Range`、`.strm` 内不是合法 http(s) 绝对地址、目标被地址策略拒绝），不再只在 Debug 级别静默返回，便于区分「没触发」与「触发了但拿不到长度」。
+- 起播后补探测的日志明确写出会同时补时长与远端大小。
+- 官方 ffprobe 刷新失败时仍继续执行远端大小补全，不再被连带跳过。
 
 ### 优化
 

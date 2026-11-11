@@ -296,8 +296,9 @@ public sealed class RemoteSizeService : IDisposable
         var url = ReadRemoteUrl(item.Path, out var strmFileLength);
         if (url is null)
         {
-            _logger.LogDebug(
-                "FastSTRM: No usable stream URL inside the .strm file of {Name}, skipping the remote size lookup",
+            _logger.LogWarning(
+                "FastSTRM: No usable http(s) URL in the .strm file of {Name}; the remote size stays unchanged. "
+                + "The first non-empty, non-# line must be an absolute http/https URL.",
                 LogSafe.Name(item));
             return null;
         }
@@ -336,6 +337,15 @@ public sealed class RemoteSizeService : IDisposable
 
         if (size is null)
         {
+            // 补全已经触发但没拿到长度。原来只有 HTTP 层的 Debug 日志，默认日志级别下
+            // 管理员完全看不到，会误判成「补全没触发」。这里给一条可见的汇总，带上
+            // 脱敏后的地址和最可能的三个原因。
+            _logger.LogWarning(
+                "FastSTRM: Could not resolve the remote size of {Name} from {Url}; the stored size stays unchanged. "
+                + "Check that the endpoint answers HEAD or a ranged GET with Content-Length/Content-Range, "
+                + "raise 'Size request timeout' if it is slow, and verify the allowed-target setting.",
+                LogSafe.Name(item),
+                UrlForLog(url));
             return null;
         }
 
@@ -365,8 +375,9 @@ public sealed class RemoteSizeService : IDisposable
         // Host names are resolved later, in the connect callback, which also covers redirects.
         if (StreamTargetPolicy.EvaluateLiteralHost(uri.DnsSafeHost, AllowPrivateNetworkTargets) == false)
         {
-            _logger.LogDebug(
-                "FastSTRM: Refusing to query {Url}; its address is not an allowed stream target",
+            _logger.LogWarning(
+                "FastSTRM: Refusing to query {Url}; its address is not an allowed stream target. "
+                + "Enable 'Allow requests to private network addresses' if this is a LAN media server.",
                 UrlForLog(url));
             return null;
         }

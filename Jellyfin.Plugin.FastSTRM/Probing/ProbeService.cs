@@ -847,7 +847,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             _logger.LogInformation(
-                "FastSTRM: Playback started before {Name} was probed, filling in duration in the background so playback progress can be tracked",
+                "FastSTRM: Playback started before {Name} was probed, filling in duration and remote size in the background",
                 LogSafe.Name(item, MaxLoggedNameLength));
 
             _logger.LogDebug(
@@ -1111,13 +1111,25 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private async Task ProbeItemAsync(BaseItem item, CancellationToken ct, bool forceRemoteSize = false)
     {
-        await item.RefreshMetadata(
-            new MetadataRefreshOptions(_directoryService)
-            {
-                EnableRemoteContentProbe = true,
-                MetadataRefreshMode = MetadataRefreshMode.FullRefresh
-            },
-            ct).ConfigureAwait(false);
+        try
+        {
+            await item.RefreshMetadata(
+                new MetadataRefreshOptions(_directoryService)
+                {
+                    EnableRemoteContentProbe = true,
+                    MetadataRefreshMode = MetadataRefreshMode.FullRefresh
+                },
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // ffprobe 失败不能把同一条链路里的大小补全一起丢掉：两者互不依赖。
+            _logger.LogWarning(ex, "FastSTRM: Official probe failed for {Name}; still resolving its remote size", LogSafe.Name(item, MaxLoggedNameLength));
+        }
 
         // The official probe measures the .strm container, so the size it stores is the size of
         // the local text file. Replace it with the real remote size after the refresh.
@@ -1145,7 +1157,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "FastSTRM: Remote size lookup failed for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
+            _logger.LogWarning(ex, "FastSTRM: Remote size lookup failed for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
             return null;
         }
     }

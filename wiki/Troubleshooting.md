@@ -76,14 +76,26 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 
 > 3.6.0 起补全动作并入后台补探测、增量探测与全量探测，独立的「仅补全文件大小」模式（`mode=SizeOnly`）已移除，旧调用会被拒绝。
 
+**先分清「没触发」和「触发了但没拿到长度」**（默认日志级别下只看 INF/WRN 即可）：
+
+| 日志关键字 | 含义 |
+| :--- | :--- |
+| `filling in duration and remote size in the background` | 起播后补探测已调度，补全动作是这条链路的一部分，**已经触发** |
+| `Wrote the remote size of ...` | 补全成功并写库 |
+| `Could not resolve the remote size of ...` | 补全已触发，但源站没给出可用长度；看后面附的脱敏地址与三项排查建议 |
+| `No usable http(s) URL in the .strm file` | `.strm` 内容不合法，请求根本没发出去 |
+| 以上都没有，且控制台计数不降 | 该条目不缺大小阈值内的问题，或三条触发链路都没开启（见上文） |
+
+一次失败会先试 `HEAD`、再试 `Range: bytes=0-0`，各占用一个「大小请求超时」（默认 10 秒），所以源站不响应时整轮探测可能多等约 20 秒，属正常现象。
+
 仍是旧值的常见原因：
 
 | 现象 | 原因 | 处理 |
 | :--- | :--- | :--- |
-| 计数不下降，日志无 `Wrote the remote size` | 源站不返回 `Content-Length`，且 `Range` 请求被拒 | 换支持长度查询的直链；插件只做一次头部请求，不会下载内容探测 |
-| 部分条目正常、部分不动 | 这些 `.strm` 里不是 `http(s)` 绝对地址，或文件为空/多行异常 | 检查 `.strm` 内容：第一行非空且非 `#` 的行必须是完整 URL |
+| 日志 `Could not resolve the remote size of ...`、计数不下降 | 源站不返回 `Content-Length`，且 `Range` 请求被拒 | 换支持长度查询的直链；插件只做头部请求，不会下载内容探测 |
+| 日志 `No usable http(s) URL` | `.strm` 里不是 `http(s)` 绝对地址，或文件为空/多行异常 | 检查 `.strm` 内容：第一行非空且非 `#` 的行必须是完整 URL |
 | 刚补全又变回几百字节 | 库扫描重写了 `.strm` 的文件信息 | 下次播放（「跳过探测 · 后台补探测」策略）或下一次入库/增量/全量探测会再次补全；也可手动再跑一次「增量探测」（只补缺大小的条目） |
-| 日志 `timed out` / `failed` | 源站响应慢或需要鉴权 | 调大「大小请求超时」（最大 60 秒）；失败条目 10 分钟内不会重复请求 |
+| 日志 `Refusing to query` / `not an allowed stream target` | 流地址是内网/环回地址，而「允许请求内网地址」被关掉了 | 打开该开关（默认开启）；链路本地地址无论如何都会被拒绝 |
 
 > 少于 1 MiB 的记录才会被替换，已有真实大小不会被覆盖。
 
