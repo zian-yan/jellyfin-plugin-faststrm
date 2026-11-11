@@ -290,22 +290,16 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        if (Plugin.Instance?.Configuration is not { EnableAutoProbe: true })
-        {
-            return;
-        }
-
         var item = e.Item;
         if (!IsStrmItem(item))
         {
             return;
         }
 
-        // 入库自动探测同时承担远端大小补全：库扫描往往已经给新条目写入了流信息，
-        // 但大小仍是那个几百字节的 .strm 文本文件，这类条目不能因为「已有流信息」被整条丢掉。
-        var needsProbe = !HasStreamInfo(item);
-        var needsSize = RemoteSizeService.NeedsRemoteSize(item);
-        if (!needsProbe && !needsSize)
+        // 「入库自动探测」是补全的三个触发点之一，关闭时整条入库链路不动作。
+        // 开启后，无论条目是否已有流信息，只要大小缺失就补大小。
+        var autoProbeEnabled = Plugin.Instance?.Configuration is { EnableAutoProbe: true };
+        if (!ShouldHandleNewItem(item, autoProbeEnabled, out var runFullProbe))
         {
             return;
         }
@@ -335,7 +329,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             // must stay inside the try: an exception escaping here would propagate into Jellyfin's
             // ItemAdded invocation during shutdown.
             var token = _shutdownCts?.Token ?? CancellationToken.None;
-            var task = Task.Run(() => RunAutoProbeAsync(item, token));
+            var task = Task.Run(() => RunAutoProbeAsync(item, runFullProbe, token));
             _autoProbeTasks[item.Id] = task;
             if (task.IsCompleted)
             {
@@ -351,7 +345,32 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private async Task RunAutoProbeAsync(BaseItem item, CancellationToken cancellationToken)
+    /// <summary>
+    /// 判断新入库的 .strm 是否需要处理，以及是「只补大小」还是「完整 ffprobe」。
+    /// </summary>
+    /// <remarks>
+    /// 库扫描往往已经给新条目写入了流信息，但大小仍是那个几百字节的 .strm 文本文件，
+    /// 这类条目不能因为「已有流信息」被整条丢掉。抽成纯函数便于覆盖「入库自动探测开启时
+    /// 补全是否触发、关闭时其他情况是否一律不触发」这一回归点。
+    /// </remarks>
+    internal static bool ShouldHandleNewItem(BaseItem item, bool autoProbeEnabled, out bool runFullProbe)
+    {
+        runFullProbe = autoProbeEnabled && !HasStreamInfo(item);
+        return autoProbeEnabled
+               && (runFullProbe || RemoteSizeService.NeedsRemoteSize(item));
+    }
+
+    /// <summary>
+    /// 「起播后补探测」是否需要处理该条目，以及是否要跑 ffprobe。
+    /// 取源链路与 <see cref="SchedulePlaybackProbe"/> 共用这一判定，避免两处条件漂移。
+    /// </summary>
+    internal static bool ShouldHandlePlaybackProbe(BaseItem item, out bool runFullProbe)
+    {
+        runFullProbe = !HasStreamInfo(item);
+        return runFullProbe || RemoteSizeService.IsRemoteSizeMissing(item);
+    }
+
+    private async Task RunAutoProbeAsync(BaseItem item, bool runFullProbe, CancellationToken cancellationToken)
     {
         SemaphoreSlim? gate = null;
         try
@@ -360,19 +379,19 @@ public sealed class ProbeService : IHostedService, IDisposable
             // rest wait here (and are cancellable on shutdown).
             gate = await AcquireProbeSlotAsync(cancellationToken).ConfigureAwait(false);
 
-            if (HasStreamInfo(item))
-            {
-                // 只有大小还停在 .strm 文本文件：只补大小，不重跑 ffprobe。
-                _logger.LogDebug(
-                    "FastSTRM: Filling in the remote size of new item {Name}",
-                    LogSafe.Name(item, MaxLoggedNameLength));
-                await FillRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
-            }
-            else
+            if (runFullProbe)
             {
                 // ProbeItemAsync 在官方探测之后顺带补写远端大小。
                 _logger.LogInformation("FastSTRM: Auto-probing new item {Name}", LogSafe.Name(item, MaxLoggedNameLength));
                 await ProbeItemAsync(item, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // 条目已有流信息：只补大小，不重跑 ffprobe。
+                _logger.LogDebug(
+                    "FastSTRM: Filling in the remote size of new item {Name}",
+                    LogSafe.Name(item, MaxLoggedNameLength));
+                await FillRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -578,7 +597,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             var items = GetStrmItems();
             var probed = items.Count(HasStreamInfo);
-            var sizeMissing = items.Count(RemoteSizeService.NeedsRemoteSize);
+            // 用统计口径而不是补全门槛：4 KiB–1 MiB 的短片写对后不该继续被算成「缺少大小」。
+            var sizeMissing = items.Count(RemoteSizeService.IsRemoteSizeMissing);
             _summaryCache = (items.Count, probed, items.Count - probed, sizeMissing);
             _summaryCacheUtcTicks = now.Ticks;
             return _summaryCache;
@@ -690,25 +710,32 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Schedules a background probe for an unprobed .strm item that is being played.
+    /// 「起播后补探测」：无流条目在后台补 ffprobe；同时**所有**仍缺远端大小的 .strm 条目在此
+    /// 补全大小（已有流信息的条目只发一次头部请求，不重跑 ffprobe）。
     /// Playback itself is never blocked: the client keeps its instant direct-play start, and the
     /// probe waits <paramref name="delaySeconds"/> (the administrator-configured delay, default
-    /// 5 seconds) so it does not compete with the player opening the stream. A probe that yields
-    /// no runtime (typically a transient 5xx from the stream endpoint) is retried a few times at
-    /// short intervals before giving up until the next playback.
+    /// 5 seconds) so it does not compete with the player opening the stream. A full probe that
+    /// yields no runtime (typically a transient 5xx from the stream endpoint) is retried a few
+    /// times at short intervals before giving up until the next playback.
     /// </summary>
     /// <param name="item">The item that is being played.</param>
     /// <param name="delaySeconds">Seconds to wait after playback started before probing.</param>
     public void SchedulePlaybackProbe(BaseItem item, int delaySeconds)
     {
-        if (_stopping || !IsStrmItem(item) || HasStreamInfo(item))
+        if (_stopping || !IsStrmItem(item))
         {
             return;
         }
 
-        // A running batch probe already covers unprobed items; do not probe the same
-        // item concurrently with it.
+        // A running batch probe already covers these items; do not touch the same item twice.
         if (State != "Idle")
+        {
+            return;
+        }
+
+        // 旧实现遇到「已有流信息」直接 return，导致这类条目永远补不上大小：
+        // 它们没有 ffprobe 需求，但大小仍是 .strm 文本文件的几百字节。
+        if (!ShouldHandlePlaybackProbe(item, out var runFullProbe))
         {
             return;
         }
@@ -726,6 +753,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
+        CancellationTokenSource? probeCts = null;
         try
         {
             _lastPlaybackProbeAttemptUtc[item.Id] = now;
@@ -733,11 +761,18 @@ public sealed class ProbeService : IHostedService, IDisposable
             var initialDelay = TimeSpan.FromSeconds(
                 Math.Clamp(delaySeconds, 0, PluginConfiguration.MaxBackgroundProbeDelaySeconds));
 
-            var probeCts = CancellationTokenSource.CreateLinkedTokenSource(
+            probeCts = CancellationTokenSource.CreateLinkedTokenSource(
                 _shutdownCts?.Token ?? CancellationToken.None);
-            _playbackProbeCancellation[item.Id] = probeCts;
 
-            var task = Task.Run(() => RunPlaybackProbeAsync(item, initialDelay, probeCts));
+            if (runFullProbe)
+            {
+                // ffprobe 依赖播放会话，停播时按配置取消。
+                _playbackProbeCancellation[item.Id] = probeCts;
+            }
+            // 只补大小不登记取消源：一次 HEAD 是与播放会话无关的元数据回填，
+            // 用户很快停止播放不该让它永远补不上。关闭服务时仍由 _shutdownCts 取消。
+
+            var task = Task.Run(() => RunPlaybackProbeAsync(item, runFullProbe, initialDelay, probeCts));
             _playbackProbeTasks[item.Id] = task;
             if (task.IsCompleted)
             {
@@ -756,6 +791,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 cts.Dispose();
             }
+            else
+            {
+                probeCts?.Dispose();
+            }
 
             _logger.LogDebug(ex, "FastSTRM: Unable to schedule a background probe for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
         }
@@ -763,12 +802,49 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private async Task RunPlaybackProbeAsync(
         BaseItem item,
+        bool runFullProbe,
         TimeSpan initialDelay,
         CancellationTokenSource probeCts)
     {
         try
         {
             var token = probeCts.Token;
+
+            if (!runFullProbe)
+            {
+                _logger.LogInformation(
+                    "FastSTRM: Filling in the remote size of {Name} in the background after playback started",
+                    LogSafe.Name(item, MaxLoggedNameLength));
+
+                await Task.Delay(initialDelay, token).ConfigureAwait(false);
+
+                if (State != "Idle")
+                {
+                    _logger.LogDebug(
+                        "FastSTRM: Dropping the remote size lookup of {Name} because a batch probe is running",
+                        LogSafe.Name(item, MaxLoggedNameLength));
+                    return;
+                }
+
+                var sizeGate = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                long? size;
+                try
+                {
+                    size = await FillRemoteSizeAsync(item, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ReleaseProbeSlot(sizeGate);
+                }
+
+                if (size is not null)
+                {
+                    // 成功即清掉节流标记，避免 10 分钟内该条目再被别的链路排一次。
+                    _lastPlaybackProbeAttemptUtc.TryRemove(item.Id, out _);
+                }
+
+                return;
+            }
 
             _logger.LogInformation(
                 "FastSTRM: Playback started before {Name} was probed, filling in duration in the background so playback progress can be tracked",
@@ -867,10 +943,9 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             _playbackProbeInFlight.TryRemove(item.Id, out _);
             _playbackProbeTasks.TryRemove(item.Id, out _);
-            if (_playbackProbeCancellation.TryRemove(item.Id, out var cts))
-            {
-                cts.Dispose();
-            }
+            // 已登记的 CTS 就是 probeCts 本身，这里只从表里摘掉，统一在最后释放一次。
+            _playbackProbeCancellation.TryRemove(item.Id, out _);
+            probeCts.Dispose();
         }
     }
 
@@ -896,7 +971,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 // 没有流信息的条目要跑 ffprobe，已有流信息但大小仍是 .strm 文本大小的条目
                 // 只补大小。否则这类条目在「官方探测 / 不补探测」策略下永远补不上。
                 items = items
-                    .Where(item => !HasStreamInfo(item) || RemoteSizeService.NeedsRemoteSize(item))
+                    .Where(item => !HasStreamInfo(item) || RemoteSizeService.IsRemoteSizeMissing(item))
                     .ToList();
             }
 
@@ -1051,20 +1126,18 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     /// <summary>
     /// Resolves and stores the real (remote) size of the item's .strm target.
-    /// Never throws: a failing size lookup must not fail the surrounding probe.
+    /// Returns the size on success, or <c>null</c> when it could not be determined.
+    /// Never throws (except cancellation): a failing size lookup must not fail the surrounding probe.
     /// </summary>
-    /// <param name="item">The .strm item.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <param name="force">
-    /// Re-resolve and overwrite an already plausible size (used by the full-library probe, which
-    /// replaces every field). Other paths pass <c>false</c> so a resolved item is never asked
-    /// twice.
-    /// </param>
-    private async Task FillRemoteSizeAsync(BaseItem item, CancellationToken ct, bool force = false)
+    /// <remarks>
+    /// 这是补全远端文件大小的**唯一执行入口**：入库自动探测、起播后补探测、手动增量/全量探测
+    /// 三条链路都汇到这里，取源与浏览详情页不调用它，因此不会产生额外的流地址请求。
+    /// </remarks>
+    private async Task<long?> FillRemoteSizeAsync(BaseItem item, CancellationToken ct, bool force = false)
     {
         try
         {
-            await _remoteSize.ResolveAsync(item, ct, force).ConfigureAwait(false);
+            return await _remoteSize.ResolveAsync(item, ct, force).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1073,6 +1146,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "FastSTRM: Remote size lookup failed for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
+            return null;
         }
     }
 

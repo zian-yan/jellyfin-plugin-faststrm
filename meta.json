@@ -3,7 +3,7 @@
   "name": "FastSTRM",
   "description": "跳过 ffprobe 远程探测，实现 .strm 秒开",
   "overview": "STRM 秒开插件",
-  "version": "3.6.1.0",
+  "version": "3.6.2.0",
   "targetAbi": "12.0.0.0",
   "owner": "FastSTRM",
   "category": "General",

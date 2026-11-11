@@ -67,12 +67,6 @@ public sealed class RemoteSizeService : IDisposable
     private const int MaxTrackedUrls = 8192;
 
     /// <summary>
-    /// Upper bound for the scheduled (non-batch) resolutions, so browsing a large library cannot
-    /// turn into an unbounded queue of HTTP requests against the stream endpoint.
-    /// </summary>
-    private const int MaxQueuedResolutions = 256;
-
-    /// <summary>
     /// Concurrent requests against stream endpoints. The resolutions are cheap header requests,
     /// but they hit the same upstreams as playback, so the fan-out stays small.
     /// </summary>
@@ -83,12 +77,6 @@ public sealed class RemoteSizeService : IDisposable
     /// stuck with a stale value for the lifetime of the server process.
     /// </summary>
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
-
-    /// <summary>
-    /// Minimum interval between two attempts for the same item, so a dead link is not retried on
-    /// every playback and every library page view.
-    /// </summary>
-    private static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Age at which a URL cache entry stops being trusted by a forced (full-library) run. Within
@@ -108,19 +96,12 @@ public sealed class RemoteSizeService : IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly ILogger<RemoteSizeService> _logger;
     private readonly SemaphoreSlim _gate = new(MaxConcurrentResolutions, MaxConcurrentResolutions);
-    private readonly CancellationTokenSource _shutdownCts = new();
 
     /// <summary>Item Id → resolved size. Read by the media-source decorator on the hot path.</summary>
     private readonly ConcurrentDictionary<Guid, CachedSize> _itemSizes = new();
 
     /// <summary>Stream URL → resolved size, so several items sharing one URL cost a single request.</summary>
     private readonly ConcurrentDictionary<string, CachedSize> _urlSizes = new(StringComparer.Ordinal);
-
-    private readonly ConcurrentDictionary<Guid, byte> _inFlight = new();
-    private readonly ConcurrentDictionary<Guid, long> _lastAttemptUtcTicks = new();
-    private readonly ConcurrentDictionary<Guid, Task> _tasks = new();
-
-    private volatile bool _disposed;
 
     public RemoteSizeService(ILibraryManager libraryManager, ILogger<RemoteSizeService> logger)
         : this(libraryManager, logger, null)
@@ -169,6 +150,51 @@ public sealed class RemoteSizeService : IDisposable
         => item.Size is null || item.Size.Value < MinimumPlausibleMediaSize;
 
     /// <summary>
+    /// 统计口径：条目是否**仍未**补全远端大小。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NeedsRemoteSize"/> 是补全动作的门槛，故意保守（&lt;1 MiB 一律当作待补全），
+    /// 由 <see cref="IsAlreadyResolved"/> 在真正发请求前短路。但拿它做统计会把 4 KiB–1 MiB
+    /// 的短片/音乐视频永远算成「缺少文件大小」：值明明已经写对了，控制台计数却不下降，
+    /// 看起来就像补全没触发。这里用 .strm 文本文件的实际长度区分两者，且只在真正有歧义的
+    /// 区间才做一次文件 stat（几百字节或 ≥1 MiB 的常见情况直接判定，无额外 I/O）。
+    /// </remarks>
+    public static bool IsRemoteSizeMissing(BaseItem item)
+    {
+        if (!NeedsRemoteSize(item))
+        {
+            return false;
+        }
+
+        if (item.Size is not long stored || stored <= 0)
+        {
+            return true;
+        }
+
+        if (stored < MinAcceptableRemoteSize)
+        {
+            // 比接受下限还小，只可能是 .strm 文本文件本身的长度。
+            return true;
+        }
+
+        try
+        {
+            if (string.IsNullOrEmpty(item.Path))
+            {
+                return true;
+            }
+
+            var strmFileLength = new FileInfo(item.Path).Length;
+            return strmFileLength <= 0 || stored == strmFileLength;
+        }
+        catch (Exception)
+        {
+            // 文件读不到时按「仍缺失」处理，宁可多补一次，也不要把真实缺失藏起来。
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Returns true when the stored size is already a resolved remote size that happens to be
     /// below <see cref="MinimumPlausibleMediaSize"/> (a short clip or a music video), so it must
     /// not be resolved again.
@@ -206,10 +232,14 @@ public sealed class RemoteSizeService : IDisposable
     }
 
     /// <summary>
-    /// Applies the size known for this item to the given media sources and schedules a background
-    /// resolution when nothing is known yet. Purely additive: never throws, never blocks.
+    /// Applies an already known size to media sources for display only.
     /// </summary>
-    public void ApplyToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
+    /// <remarks>
+    /// <b>Never triggers a lookup.</b> 补全远端文件大小只允许由三条探测链路发起：入库自动探测、
+    /// 起播后补探测、手动增量/全量探测。取源（PlaybackInfo）与浏览详情页都属于「其他情况」，
+    /// 这里只读进程内缓存，缓存未命中就保持数据库现值，绝不排队、绝不发请求。
+    /// </remarks>
+    public void ApplyCachedSizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
         if (sources is null || sources.Count == 0)
         {
@@ -217,15 +247,8 @@ public sealed class RemoteSizeService : IDisposable
         }
 
         var size = TryGetCachedSize(item.Id);
-        if (size is null)
+        if (size is null || (!NeedsRemoteSize(item) && item.Size == size))
         {
-            Schedule(item);
-            return;
-        }
-
-        if (!NeedsRemoteSize(item) && item.Size == size)
-        {
-            // Already correct in the database; nothing to patch and nothing to schedule.
             return;
         }
 
@@ -235,83 +258,6 @@ public sealed class RemoteSizeService : IDisposable
             {
                 source.Size = size;
             }
-        }
-
-        // The cached value and the stored one disagree: either the write failed earlier or the
-        // item was re-scanned afterwards. Schedule so the database catches up with the response,
-        // otherwise the API and the item row disagree for the whole cache TTL.
-        if (NeedsRemoteSize(item))
-        {
-            Schedule(item);
-        }
-    }
-
-    /// <summary>
-    /// Queues a background resolution for an item whose size is still the .strm file size.
-    /// </summary>
-    public void Schedule(BaseItem item)
-    {
-        if (_disposed
-            || !IsStrmItem(item)
-            || !NeedsRemoteSize(item))
-        {
-            return;
-        }
-
-        var now = DateTime.UtcNow.Ticks;
-        if (_lastAttemptUtcTicks.TryGetValue(item.Id, out var lastAttempt)
-            && now - lastAttempt < RetryInterval.Ticks)
-        {
-            return;
-        }
-
-        if (_tasks.Count >= MaxQueuedResolutions)
-        {
-            return;
-        }
-
-        if (!_inFlight.TryAdd(item.Id, 0))
-        {
-            return;
-        }
-
-        try
-        {
-            PruneAttempts(now);
-            _lastAttemptUtcTicks[item.Id] = now;
-            var token = _shutdownCts.Token;
-
-            var task = Task.Run(async () =>
-            {
-                try
-                {
-                    await ResolveAsync(item, token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Shutdown or a cancelled probe; the next playback retries.
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "FastSTRM: Unable to resolve the remote size of {Name}", LogSafe.Name(item));
-                }
-                finally
-                {
-                    _inFlight.TryRemove(item.Id, out _);
-                    _tasks.TryRemove(item.Id, out _);
-                }
-            });
-
-            _tasks[item.Id] = task;
-            if (task.IsCompleted)
-            {
-                _tasks.TryRemove(item.Id, out _);
-            }
-        }
-        catch (Exception ex)
-        {
-            _inFlight.TryRemove(item.Id, out _);
-            _logger.LogDebug(ex, "FastSTRM: Unable to schedule a remote size lookup for {Name}", LogSafe.Name(item));
         }
     }
 
@@ -358,8 +304,8 @@ public sealed class RemoteSizeService : IDisposable
 
         // The stored size is below the plausibility threshold but is NOT the length of the .strm
         // text file: a previous run already wrote a size that is genuinely small (short clip,
-        // music video). Without this check such an item is treated as "missing" forever — it gets
-        // re-queued on every browse and costs a request every RetryInterval.
+        // music video). Without this check such an item is treated as "missing" forever and every
+        // probe run would re-resolve an already correct value.
         if (!force && IsAlreadyResolved(item, strmFileLength))
         {
             return item.Size;
@@ -656,6 +602,7 @@ public sealed class RemoteSizeService : IDisposable
             return;
         }
 
+        var previousSize = item.Size;
         item.Size = size;
 
         try
@@ -671,10 +618,13 @@ public sealed class RemoteSizeService : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Shutdown; the size stays in memory and is written by the next run.
+            // Shutdown. Roll the in-memory value back too: otherwise this object reports a
+            // plausible size, NeedsRemoteSize goes false and no later run retries the DB write.
+            item.Size = previousSize;
         }
         catch (Exception ex)
         {
+            item.Size = previousSize;
             _logger.LogWarning(ex, "FastSTRM: Unable to persist the remote size of {Name}", LogSafe.Name(item));
         }
     }
@@ -751,32 +701,6 @@ public sealed class RemoteSizeService : IDisposable
     }
 
     /// <summary>
-    /// Keeps the retry-throttle map bounded. Entries only matter inside
-    /// <see cref="RetryInterval"/>, so anything older is dead; a map still full afterwards is
-    /// cleared, which at worst allows one extra attempt per item.
-    /// </summary>
-    private void PruneAttempts(long nowTicks)
-    {
-        if (_lastAttemptUtcTicks.Count < MaxTrackedItems)
-        {
-            return;
-        }
-
-        foreach (var pair in _lastAttemptUtcTicks)
-        {
-            if (nowTicks - pair.Value >= RetryInterval.Ticks)
-            {
-                _lastAttemptUtcTicks.TryRemove(pair.Key, out _);
-            }
-        }
-
-        if (_lastAttemptUtcTicks.Count >= MaxTrackedItems)
-        {
-            _lastAttemptUtcTicks.Clear();
-        }
-    }
-
-    /// <summary>
     /// Keeps a cache bounded: expired entries go first, and a cache still full afterwards is
     /// cleared, which only costs repeated requests.
     /// </summary>
@@ -815,22 +739,13 @@ public sealed class RemoteSizeService : IDisposable
             ? $"{uri.Scheme}://{uri.Authority}{uri.AbsolutePath}"
             : "(invalid url)";
 
+    /// <summary>
+    /// Nothing to release: the shared <see cref="HttpClient"/> is process-wide and the test-only
+    /// transport is owned by the test. Every request is owned and cancelled by the calling probe
+    /// flow, so this service no longer owns background tasks.
+    /// </summary>
     public void Dispose()
     {
-        _disposed = true;
-
-        // Cancel only: a scheduled task may still be reading the token, and disposing the source
-        // underneath it would throw instead of unwinding cleanly.
-        try
-        {
-            _shutdownCts.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (AggregateException)
-        {
-        }
     }
 
     private readonly struct CachedSize

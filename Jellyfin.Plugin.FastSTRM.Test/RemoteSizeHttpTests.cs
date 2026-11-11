@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FastSTRM.Probing;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Model.Dto;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -197,6 +198,45 @@ public class RemoteSizeHttpTests
 
             Assert.Null(size);
             Assert.Empty(handler.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // ── 取源 / 浏览详情：只读缓存，绝不触发补全 ──
+
+    [Fact]
+    public void CachedSizeOnly_NeverTriggersALookupOnCacheMiss()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var item = new Video { Path = "/media/movie.strm", Size = 180 };
+        var sources = new List<MediaSourceInfo> { new() { Size = 180 } };
+
+        service.ApplyCachedSizeToSources(item, sources);
+
+        Assert.Empty(handler.Requests);
+        Assert.Equal(180, sources[0].Size);
+    }
+
+    [Fact]
+    public async Task CachedSizeOnly_PatchesDisplayValueAfterAProbe()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.mkv\n");
+        try
+        {
+            var item = new Video { Path = path, Size = 0 };
+            await service.ResolveAsync(item, CancellationToken.None);
+
+            var sources = new List<MediaSourceInfo> { new() { Size = 180 } };
+            service.ApplyCachedSizeToSources(item, sources);
+
+            Assert.Single(handler.Requests);
+            Assert.Equal(EightMegabytes, sources[0].Size);
         }
         finally
         {

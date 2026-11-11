@@ -134,25 +134,25 @@ Details, fallback matrix and API examples: see the Wiki —
 
 When Jellyfin probes a `.strm` item it probes the **local text file**, so the stored "file size" — and therefore the size shown on the media info page — is the size of that few-hundred-byte `.strm` file. ffprobe cannot supply the real size either (HTTP streams usually report `size=N/A`).
 
-The plugin **always fills in the remote size** (no toggle since 3.6.1 — the dashboard only keeps the request timeout):
+Remote size filling has **no toggle** (since 3.6.1 the dashboard only keeps the request timeout), but it is triggered by exactly three probe flows. Nothing else ever sends a request to the stream endpoint.
 
 1. The plugin reads the stream URL out of the `.strm` file and sends a `HEAD` request for `Content-Length`;
 2. If the endpoint rejects `HEAD` (405/501) or omits the length, it falls back to a one-byte ranged `GET` and reads the total from `Content-Range`;
 3. The resolved size is written back onto the item (only records below `< 1 MiB` are replaced — a plausible size is never overwritten).
 
-Filling in is part of every probe flow — there is no separate "size only" mode any more:
-
-| Scenario | Behaviour |
+| Triggers | Behaviour |
 | :--- | :--- |
-| Incremental probe | Unprobed items are filled in after their ffprobe; items that already have stream info but still carry the `.strm` text size only get the size resolved (no ffprobe) |
-| Full probe | Every item is re-resolved, overwriting any stored size |
-| Auto-probe on import | Unprobed new items are filled in after their ffprobe; items the scan already probed only get the size resolved, without a second ffprobe |
-| Post-start background probe | Filled in right after the probe, with no extra content request |
-| Opening item details | **Cache read only, no request**: the details page never triggers a size lookup, whatever the playback policy is |
-| Starting playback | Only under "skip probe + background probe": served from cache when known, otherwise resolved in the background without delaying the start |
-| Manual | Run **Incremental** (fills the items still missing a size) or **Full** (rewrites everything) in the dashboard, i.e. `POST /FastStrm/Probe/Start?mode=Incremental\|Full` |
+| Auto-probe on import (when enabled) | Unprobed new items are filled in after their ffprobe; items the scan already probed only get the size resolved |
+| Post-start background probe ("skip probe + background probe" policy) | Unprobed items are filled in after ffprobe; items with stream info but a missing size only get the size resolved, no ffprobe. This header request is independent of the playback session, so stopping playback does not cancel it |
+| Manual incremental / full probe | Incremental covers items missing stream info or size; full re-resolves and overwrites every size |
 
-The dashboard gains a **Missing file size** counter; the request timeout defaults to 10 seconds (1–60).
+| Does not trigger | Behaviour |
+| :--- | :--- |
+| Playback source lookup (PlaybackInfo) | Cache-only display patch: no queueing, no request |
+| Opening item details | Same as above |
+| "Official probe" / "skip probe, no background probe" | No post-start background probe is scheduled; run an incremental probe manually instead |
+
+The dashboard gains a **Missing file size** counter (a genuinely small but resolved size no longer counts as missing); the request timeout defaults to 10 seconds (1–60).
 
 > Only a lightweight header request is made — nothing is downloaded. Failures (timeout, auth, no length reported) keep the previous value and are retried at most every 10 minutes per item.
 

@@ -80,9 +80,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     ///    a configuration change applies to the next playback without a restart.
     ///    With "skip probe" the item starts instantly and a background probe is scheduled only if
     ///    the policy asks for it, after the policy's delay (default: no background probe).
-    /// 4. 远端文件大小补全同样受策略约束：起播路径只有「跳过探测 · 后台补探测」才会读取并向流地址
-    ///    请求大小，「官方探测」与「不补探测」都不发这次请求。
-    ///    浏览详情页（<see cref="GetStaticMediaSources"/>）无论何种模式都只读缓存、不发请求。
+    /// 4. 取源本身**不触发**远端大小补全，只用进程内缓存修正展示值；真正的补全由「起播后补探测」
+    ///    （<see cref="ProbeService.SchedulePlaybackProbe"/>）承担，只有「跳过探测 · 后台补探测」
+    ///    策略才会调度。「官方探测」「不补探测」以及浏览详情页都不发这次请求。
     /// </summary>
     public async Task<IReadOnlyList<MediaSourceInfo>> GetPlaybackMediaSources(
         BaseItem item,
@@ -137,26 +137,20 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             .ConfigureAwait(false);
 
         int? backgroundProbeDelaySeconds = null;
-        if (!hasStreamInfo && policy.ShouldProbeInBackground)
+        if (policy.ShouldProbeInBackground
+            && ProbeService.ShouldHandlePlaybackProbe(item, out _))
         {
-            // Playback starts immediately, but a duration is required for Jellyfin to save
-            // resume points and to decide when an item has been watched to completion.
-            // Schedule the probe after the playback sources are built so the response and the
-            // background refresh never touch the item at the same time.
+            // 「起播后补探测」既补时长/轨道，也补全远端大小：已有流信息但大小仍是 .strm
+            // 文本大小的条目同样要调度，否则这类条目永远补不上。
+            // 调度放在取源之后，避免响应与后台刷新同时写同一个条目。
             backgroundProbeDelaySeconds = policy.BackgroundProbeDelaySeconds;
             ScheduleBackgroundProbe(item, backgroundProbeDelaySeconds.Value);
         }
 
         WarnIfStreamInfoMissing(item, hasStreamInfo, sources, backgroundProbeDelaySeconds);
 
-        // Jellyfin materialises Size from item.Size, which for a .strm item is the size of the
-        // local text file. Replace it with the remote size — but only under「跳过探测 · 后台补探测」:
-        // 这个策略本来就要为同一条目发一次探测请求，补大小不再额外增加流量。
-        // 「官方探测」与「不补探测」下不发这次请求（读数属于探测范畴，不是播放必需）。
-        if (policy.ShouldProbeInBackground)
-        {
-            _remoteSize.ApplyToSources(item, sources);
-        }
+        // 只做展示层修正：取源链路不是补全的触发点，缓存未命中就保持数据库现值。
+        _remoteSize.ApplyCachedSizeToSources(item, sources);
 
         return sources;
     }
@@ -264,23 +258,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     {
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
 
-        if (!IsStrmItem(item) || sources is null || sources.Count == 0)
+        if (IsStrmItem(item))
         {
-            return sources;
-        }
-
-        var size = _remoteSize.TryGetCachedSize(item.Id);
-        if (size is not long known)
-        {
-            return sources;
-        }
-
-        foreach (var source in sources)
-        {
-            if (source.Size != known)
-            {
-                source.Size = known;
-            }
+            _remoteSize.ApplyCachedSizeToSources(item, sources);
         }
 
         return sources;
