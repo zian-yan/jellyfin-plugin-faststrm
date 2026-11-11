@@ -445,6 +445,19 @@ public sealed class RemoteSizeService : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Fallback for endpoints that reject or mishandle <c>HEAD</c>: asks for a two-byte range and
+    /// reads the total length out of <c>Content-Range</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why two bytes and not one:</b> <c>Range: bytes=0-0</c> is a legal request, but some CDNs
+    /// (observed on 光雅 / guangyacdn smartstrm links) special-case a single-byte range and answer
+    /// <c>200</c> with <c>Content-Length: 1</c> and <b>no</b> <c>Content-Range</c> — the total length
+    /// is then unobtainable and every probe of that item fails with "could not resolve the remote
+    /// size". The same host answers <c>bytes=0-1</c> with a proper <c>206</c> +
+    /// <c>Content-Range: bytes 0-1/&lt;total&gt;</c>, so the request asks for two bytes. The extra byte
+    /// costs nothing: it is drained below to keep the connection pooled.
+    /// </remarks>
     private async Task<long?> TryRangedGetAsync(Uri uri, string url, CancellationToken cancellationToken)
     {
         try
@@ -453,7 +466,7 @@ public sealed class RemoteSizeService : IDisposable
             var token = timeoutCts.Token;
 
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.Range = new RangeHeaderValue(0, 0);
+            request.Headers.Range = new RangeHeaderValue(0, 1);
 
             using var response = await _http
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
@@ -465,7 +478,7 @@ public sealed class RemoteSizeService : IDisposable
             var totalLength = response.Content.Headers.ContentRange?.Length;
             if (IsAcceptableRemoteSize(totalLength))
             {
-                // Drain the single byte the range asked for. Without this the connection is closed
+                // Drain the two bytes the range asked for. Without this the connection is closed
                 // on dispose instead of returning to the pool, and every lookup pays a full
                 // TCP+TLS handshake.
                 await DrainTinyBodyAsync(response, token).ConfigureAwait(false);

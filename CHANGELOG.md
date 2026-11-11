@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 补全远端大小失败时给出可见的 Warning 日志（源站无 `Content-Length`/`Content-Range`、`.strm` 内不是合法 http(s) 绝对地址、目标被地址策略拒绝），不再只在 Debug 级别静默返回，便于区分「没触发」与「触发了但拿不到长度」。
 - 起播后补探测的日志明确写出会同时补时长与远端大小。
 - 官方 ffprobe 刷新失败时仍继续执行远端大小补全，不再被连带跳过。
+- 修复部分 CDN（光雅 / guangyacdn 的 `smartstrm` 直链）永远补不上远端大小的问题：这类源站把 `Range: bytes=0-0` 降级成 `200` + `Content-Length: 1` 且不返回 `Content-Range`，改用 `bytes=0-1` 请求即可正常拿到 `Content-Range` 里的总长，代价仍是一次 2 字节的请求。
 
 ### 优化
 

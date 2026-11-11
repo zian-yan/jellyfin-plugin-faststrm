@@ -89,7 +89,7 @@ public class RemoteSizeHttpTests
         Assert.Equal(EightMegabytes, size);
         Assert.Equal(2, handler.Requests.Count);
         Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
-        Assert.Equal("bytes=0-0", handler.Requests[1].Headers.Range?.ToString());
+        Assert.Equal("bytes=0-1", handler.Requests[1].Headers.Range?.ToString());
     }
 
     [Fact]
@@ -203,6 +203,32 @@ public class RemoteSizeHttpTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task Query_SurvivesCdnThatDegradesSingleByteRange()
+    {
+        // 回归：部分 CDN（光雅 / guangyacdn 的 smartstrm 直链）对 bytes=0-0 返回 200 +
+        // Content-Length: 1 且不带 Content-Range，单字节 range 拿不到总长；bytes=0-1 才正常。
+        const long total = 32_100_303_697L;
+        var handler = new StubHandler(request =>
+        {
+            if (request.Method == HttpMethod.Head)
+            {
+                return new HttpResponseMessage(HttpStatusCode.MethodNotAllowed);
+            }
+
+            return request.Headers.Range?.ToString() == "bytes=0-1"
+                ? PartialContent(0, 1, total)
+                : Json(HttpStatusCode.OK, 1);
+        });
+        using var service = CreateService(handler);
+
+        var size = await service.QueryRemoteSizeAsync("http://93.184.216.34/movie.mkv", CancellationToken.None);
+
+        Assert.Equal(total, size);
+        var rangedGet = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Get);
+        Assert.Equal("bytes=0-1", rangedGet.Headers.Range?.ToString());
     }
 
     // ── 取源 / 浏览详情：只读缓存，绝不触发补全 ──
