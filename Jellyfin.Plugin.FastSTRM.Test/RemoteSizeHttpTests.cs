@@ -399,6 +399,71 @@ public class RemoteSizeHttpTests
         }
     }
 
+    // ── 失败诊断：Warning 里要能看出是哪一跳、什么原因 ──
+
+    [Fact]
+    public async Task Diagnostics_ExplainRejectedHeadAndIgnoredRange()
+    {
+        // HEAD 被拒 + GET 忽略 Range 且只回 1 字节：两条失败原因都要出现在诊断里，
+        // 否则管理员只能看到「拿不到长度」而不知道源站到底答了什么。
+        var handler = new StubHandler(request => request.Method == HttpMethod.Head
+            ? new HttpResponseMessage(HttpStatusCode.MethodNotAllowed)
+            : Json(HttpStatusCode.OK, 1));
+        using var service = CreateService(handler);
+
+        var (size, diagnostic) = await service.QueryRemoteSizeWithDiagnosticsAsync(
+            "http://93.184.216.34/movie.mkv",
+            CancellationToken.None);
+
+        Assert.Null(size);
+        Assert.Contains("405", diagnostic);
+        Assert.Contains("Content-Range", diagnostic);
+        Assert.Contains("Content-Length 1", diagnostic);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ReportTargetPolicyRejection()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler, allowPrivateTargets: false);
+
+        var (size, diagnostic) = await service.QueryRemoteSizeWithDiagnosticsAsync(
+            "http://127.0.0.1:8096/movie.mkv",
+            CancellationToken.None);
+
+        Assert.Null(size);
+        Assert.Contains("allowed-target", diagnostic);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ReportTheHopThatSucceeded()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+
+        var (size, diagnostic) = await service.QueryRemoteSizeWithDiagnosticsAsync(
+            "http://93.184.216.34/movie.mkv",
+            CancellationToken.None);
+
+        Assert.Equal(EightMegabytes, size);
+        Assert.Equal("ok (HEAD)", diagnostic);
+    }
+
+    [Fact]
+    public void DescribeTransport_NeverLeaksProxyCredentials()
+    {
+        // 代理地址来自环境变量，可能带 user:password@，日志里不能出现。
+        var transport = RemoteSizeService.DescribeTransport();
+
+        Assert.False(string.IsNullOrWhiteSpace(transport));
+        Assert.DoesNotContain("@", transport);
+        Assert.True(
+            transport.StartsWith("directly", StringComparison.Ordinal)
+            || transport.StartsWith("through proxy", StringComparison.Ordinal),
+            transport);
+    }
+
     // ── helpers ──
 
     private static RemoteSizeService CreateService(HttpMessageHandler handler, bool allowPrivateTargets = true)

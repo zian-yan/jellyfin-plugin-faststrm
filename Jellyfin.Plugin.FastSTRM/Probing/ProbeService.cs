@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,6 +38,20 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static readonly TimeSpan ShutdownTaskTimeout = TimeSpan.FromSeconds(10);
 
     private const int MaxQueuedAutoProbes = 2048;
+
+    /// <summary>
+    /// Assembly version of the running plugin (e.g. <c>3.6.2.0</c>). Printed once at startup:
+    /// the same version number has been re-released several times, so the only reliable way to
+    /// tell which build is loaded is the timestamp of the dll that follows it.
+    /// </summary>
+    private static readonly string PluginVersion =
+        typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    /// <summary>
+    /// Build/copy time of the loaded plugin dll, or <c>unknown</c> when the assembly has no
+    /// physical location (single-file publish).
+    /// </summary>
+    private static readonly string BuildStamp = ReadBuildStamp();
 
     /// <summary>
     /// Length caps for item names written to the log / rendered in the UI. See <see cref="LogSafe"/>:
@@ -202,6 +218,17 @@ public sealed class ProbeService : IHostedService, IDisposable
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _stopping = false;
+
+        // 一行启动日志回答三个排查问题：装的是哪个构建（同版本号重发过多次，版本号本身
+        // 无法区分）、dll 的构建时间、以及探测请求出网时是否走了代理。
+        // 缺少这一行时，「有时能补有时不能」只能靠开 Debug 复现。
+        _logger.LogInformation(
+            "FastSTRM {Version} loaded (FastSTRM.dll built {BuiltAt}); remote size requests go {Transport}, timeout {TimeoutSeconds}s",
+            PluginVersion,
+            BuildStamp,
+            RemoteSizeService.DescribeTransport(),
+            Plugin.Instance?.Configuration.GetRemoteSizeTimeoutSeconds()
+                ?? PluginConfiguration.DefaultRemoteSizeTimeoutSeconds);
 
         // Replace a source left over from a previous start so it does not stay undisposed.
         _shutdownCts?.Dispose();
@@ -1323,6 +1350,28 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             _logger.LogDebug(ex, "FastSTRM: Unable to re-read {Name} after probing", LogSafe.Name(item, MaxLoggedNameLength));
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the build/copy time of the loaded plugin assembly, formatted for one log line.
+    /// </summary>
+    /// <remarks>
+    /// Never throws: this only decorates a log message, and a plugin must not fail to start
+    /// because a metadata read did.
+    /// </remarks>
+    private static string ReadBuildStamp()
+    {
+        try
+        {
+            var location = typeof(Plugin).Assembly.Location;
+            return string.IsNullOrEmpty(location)
+                ? "unknown"
+                : File.GetLastWriteTimeUtc(location).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "Z";
+        }
+        catch (Exception)
+        {
+            return "unknown";
         }
     }
 

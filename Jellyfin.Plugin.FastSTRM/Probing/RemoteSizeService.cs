@@ -346,10 +346,11 @@ public sealed class RemoteSizeService : IDisposable
         }
 
         long? size;
+        string diagnostic;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            size = await QueryRemoteSizeAsync(url, cancellationToken).ConfigureAwait(false);
+            (size, diagnostic) = await QueryRemoteSizeWithDiagnosticsAsync(url, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -359,14 +360,18 @@ public sealed class RemoteSizeService : IDisposable
         if (size is null)
         {
             // 补全已经触发但没拿到长度。原来只有 HTTP 层的 Debug 日志，默认日志级别下
-            // 管理员完全看不到，会误判成「补全没触发」。这里给一条可见的汇总，带上
-            // 脱敏后的地址和最可能的三个原因。
+            // 管理员完全看不到，会误判成「补全没触发」。这里给一条可见的汇总，
+            // 直接带上每一跳的结论（状态码 / 超时 / 异常），并点出传输方式，
+            // 这样「有时能补、有时不能」不必开 Debug 也能定位到是源站还是代理。
             _logger.LogWarning(
                 "FastSTRM: Could not resolve the remote size of {Name} from {Url}; the stored size stays unchanged. "
+                + "Reason: {Reason}. Requests go {Transport}. "
                 + "Check that the endpoint answers HEAD or a ranged GET with Content-Length/Content-Range, "
                 + "raise 'Size request timeout' if it is slow, and verify the allowed-target setting.",
                 LogSafe.Name(item),
-                UrlForLog(url));
+                UrlForLog(url),
+                diagnostic,
+                DescribeTransport());
             return null;
         }
 
@@ -386,10 +391,26 @@ public sealed class RemoteSizeService : IDisposable
     /// to one URL (target filtering + HEAD/ranged-GET fallback).
     /// </remarks>
     internal async Task<long?> QueryRemoteSizeAsync(string url, CancellationToken cancellationToken)
+        => (await QueryRemoteSizeWithDiagnosticsAsync(url, cancellationToken).ConfigureAwait(false)).Size;
+
+    /// <summary>
+    /// Same as <see cref="QueryRemoteSizeAsync"/>, but also returns a short, log-safe explanation of
+    /// what the endpoint actually answered.
+    /// </summary>
+    /// <remarks>
+    /// 一条「拿不到长度」的日志如果只说拿不到，管理员无从区分是「HEAD 被拒」「源站不回长度」
+    /// 还是「网关/代理拦了请求」，只能靠开 Debug 复现。这里把每一跳的结论累积下来，
+    /// 由调用方一次性写进 Warning，失败原因当场可见。
+    /// </remarks>
+    internal async Task<(long? Size, string Diagnostic)> QueryRemoteSizeWithDiagnosticsAsync(
+        string url,
+        CancellationToken cancellationToken)
     {
+        var notes = new LookupNotes();
+
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            return null;
+            return (null, "the url is not an absolute uri");
         }
 
         // Fast, clear rejection for literal addresses (127.0.0.1, 169.254.169.254, 10.0.0.5, …).
@@ -400,16 +421,19 @@ public sealed class RemoteSizeService : IDisposable
                 "FastSTRM: Refusing to query {Url}; its address is not an allowed stream target. "
                 + "Enable 'Allow requests to private network addresses' if this is a LAN media server.",
                 UrlForLog(url));
-            return null;
+            return (null, "the target address is not allowed by the allowed-target setting");
         }
 
-        var fromHead = await TryHeadAsync(uri, url, cancellationToken).ConfigureAwait(false);
+        var fromHead = await TryHeadAsync(uri, url, notes, cancellationToken).ConfigureAwait(false);
         if (fromHead is not null)
         {
-            return fromHead;
+            return (fromHead, "ok (HEAD)");
         }
 
-        return await TryRangedGetAsync(uri, url, cancellationToken).ConfigureAwait(false);
+        var fromGet = await TryRangedGetAsync(uri, url, notes, cancellationToken).ConfigureAwait(false);
+        return fromGet is not null
+            ? (fromGet, "ok (ranged GET)")
+            : (null, notes.Summarize());
     }
 
     /// <summary>
@@ -418,7 +442,11 @@ public sealed class RemoteSizeService : IDisposable
     /// Each attempt gets its own deadline: a HEAD that only ran out of time must not consume the
     /// budget of the GET that follows it.
     /// </summary>
-    private async Task<long?> TryHeadAsync(Uri uri, string url, CancellationToken cancellationToken)
+    private async Task<long?> TryHeadAsync(
+        Uri uri,
+        string url,
+        LookupNotes notes,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -428,17 +456,28 @@ public sealed class RemoteSizeService : IDisposable
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token)
                 .ConfigureAwait(false);
 
-            if (response.IsSuccessStatusCode && IsAcceptableRemoteSize(response.Content.Headers.ContentLength))
+            if (response.IsSuccessStatusCode)
             {
-                return response.Content.Headers.ContentLength;
+                var contentLength = response.Content.Headers.ContentLength;
+                if (IsAcceptableRemoteSize(contentLength))
+                {
+                    return contentLength;
+                }
+
+                notes.Add($"HEAD returned {DescribeStatus(response)} without a usable Content-Length ({DescribeLength(contentLength)})");
+                return null;
             }
+
+            notes.Add($"HEAD returned {DescribeStatus(response)}");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            notes.Add($"HEAD timed out after {GetTimeoutSeconds()}s");
             _logger.LogDebug("FastSTRM: The HEAD request for {Url} timed out, trying a ranged GET", UrlForLog(url));
         }
         catch (HttpRequestException ex)
         {
+            notes.Add("HEAD failed: " + Short(ex.Message));
             _logger.LogDebug(ex, "FastSTRM: The HEAD request for {Url} failed", UrlForLog(url));
         }
 
@@ -458,7 +497,11 @@ public sealed class RemoteSizeService : IDisposable
     /// <c>Content-Range: bytes 0-1/&lt;total&gt;</c>, so the request asks for two bytes. The extra byte
     /// costs nothing: it is drained below to keep the connection pooled.
     /// </remarks>
-    private async Task<long?> TryRangedGetAsync(Uri uri, string url, CancellationToken cancellationToken)
+    private async Task<long?> TryRangedGetAsync(
+        Uri uri,
+        string url,
+        LookupNotes notes,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -485,21 +528,129 @@ public sealed class RemoteSizeService : IDisposable
                 return totalLength;
             }
 
-            if (response.StatusCode == HttpStatusCode.OK && IsAcceptableRemoteSize(response.Content.Headers.ContentLength))
+            var contentLength = response.Content.Headers.ContentLength;
+            if (response.StatusCode == HttpStatusCode.OK && IsAcceptableRemoteSize(contentLength))
             {
-                return response.Content.Headers.ContentLength;
+                return contentLength;
             }
+
+            notes.Add(
+                $"{DescribeStatus(response)} without a usable Content-Range ({DescribeLength(totalLength)}), "
+                + $"Content-Length {DescribeLength(contentLength)}");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            notes.Add($"ranged GET timed out after {GetTimeoutSeconds()}s");
             _logger.LogDebug("FastSTRM: The size request for {Url} timed out", UrlForLog(url));
         }
         catch (HttpRequestException ex)
         {
+            notes.Add("ranged GET failed: " + Short(ex.Message));
             _logger.LogDebug(ex, "FastSTRM: The size request for {Url} failed", UrlForLog(url));
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Renders the response status (and its reason phrase) for a diagnostic note. The reason phrase
+    /// comes from the remote server, so it is sanitized and shortened before it reaches the log.
+    /// </summary>
+    private static string DescribeStatus(HttpResponseMessage response)
+        => $"HTTP {(int)response.StatusCode} {Short(response.ReasonPhrase ?? string.Empty, 40)}".TrimEnd();
+
+    private static string DescribeLength(long? length)
+        => length is long value ? value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none";
+
+    /// <summary>
+    /// Sanitizes a value that originated from the remote server (exception text, reason phrase):
+    /// control characters are neutralized so a hostile endpoint cannot forge log lines, and the
+    /// length is capped because the value is repeated for every failed item.
+    /// </summary>
+    private static string Short(string value, int maxLength = 160)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var chars = (value.Length <= maxLength ? value : value[..maxLength] + "…").ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (char.IsControl(chars[i]))
+            {
+                chars[i] = ' ';
+            }
+        }
+
+        return new string(chars).Trim();
+    }
+
+    /// <summary>
+    /// Describes how size lookups leave the process, so "sometimes it works" is diagnosable from the
+    /// startup log alone: <c>.NET</c> lets <see cref="HttpClient"/> pick the proxy from the
+    /// environment, and a proxy that drops <c>CONNECT</c>/<c>HEAD</c> looks exactly like a flaky
+    /// origin.
+    /// </summary>
+    public static string DescribeTransport()
+    {
+        foreach (var name in ProxyEnvironmentVariables)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return "through proxy " + RedactProxy(value);
+            }
+        }
+
+        return "directly (no proxy configured)";
+    }
+
+    private static readonly string[] ProxyEnvironmentVariables =
+    {
+        "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"
+    };
+
+    /// <summary>
+    /// Strips credentials from a proxy URL: the value is an environment variable and may carry
+    /// <c>user:password@</c>, which must not be written to the server log.
+    /// </summary>
+    private static string RedactProxy(string value)
+    {
+        var trimmed = value.Trim();
+
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            var authority = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+            return $"{uri.Scheme}://{authority}";
+        }
+
+        // Not a parseable URL: keep the shape but never echo possible credentials.
+        return trimmed.Contains('@', StringComparison.Ordinal)
+            ? Short(trimmed[(trimmed.LastIndexOf('@') + 1)..], 80)
+            : Short(trimmed, 80);
+    }
+
+    /// <summary>
+    /// Accumulates one short note per failed hop, so the final warning explains what the endpoint
+    /// actually answered instead of only that the size is unknown.
+    /// </summary>
+    private sealed class LookupNotes
+    {
+        private const int MaxNotes = 4;
+
+        private readonly List<string> _notes = new();
+
+        public void Add(string note)
+        {
+            if (_notes.Count < MaxNotes && !_notes.Contains(note, StringComparer.Ordinal))
+            {
+                _notes.Add(note);
+            }
+        }
+
+        public string Summarize()
+            => _notes.Count == 0 ? "the endpoint returned no usable answer" : string.Join("; ", _notes);
     }
 
     private static CancellationTokenSource BeginRequestTimeout(CancellationToken cancellationToken)
