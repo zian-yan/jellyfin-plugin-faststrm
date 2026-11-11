@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 修复
 
-- 补全远端文件大小现在只在三条探测链路触发：入库自动探测、起播后补探测、手动增量/全量探测；取源（PlaybackInfo）与浏览详情页只读缓存，不再排队或发请求。
+- 补全远端文件大小改为「按来源准入」：只有入库自动探测、起播后补探测、手动增量探测、手动全量探测会补全；取源（PlaybackInfo）、浏览详情页、「官方探测」「不补探测」以及任何未列明场景一律不补全，不再依赖各调用点自己多写的条件来凑巧避开。
+- 触发判定收敛到 `RemoteSizeTrigger` + `RemoteSizeTriggerPolicy.AllowsSizeFill` 一处，并在唯一执行入口 `RemoteSizeService.ResolveAsync` 强制校验：未登记的来源（含默认值与未定义枚举值）连 `.strm` 都不读、不发请求，新增调用点无法绕过。
+- 「是否重新解析已有大小」由来源推导（只有全量探测覆盖已有记录），不再与探测模式各持一个真值来源。
+- `ShouldHandlePlaybackProbe` 纳入播放策略与 `.strm` 类型判定，取源、进度上报与后台调度三处共用同一结论；`ShouldHandleNewItem` 同样补齐类型判定。
 - 修复已有流信息但大小仍是 `.strm` 文本大小的条目在「起播后补探测」下永远补不上的问题：旧代码遇到 `HasStreamInfo` 直接跳过整个后台补探测。
 - 「缺少文件大小」计数不再把 4 KiB–1 MiB 的短片、音乐视频等已写入的真实大小算作缺失。
 - 写库失败时回滚内存中的大小，避免缓存显示已补全、数据库仍是旧值且不再重试。
@@ -29,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 补全动作收敛到唯一入口 `ProbeService.FillRemoteSizeAsync`，移除 `RemoteSizeService` 的后台调度与节流队列。
 - 补充触发判定、统计口径与「非触发场景不发请求」的单元测试。
+- 补充触发矩阵（含未定义来源）、播放策略矩阵、阈值边界与「禁止来源零请求零写入」的回归测试。
 
 ---
 

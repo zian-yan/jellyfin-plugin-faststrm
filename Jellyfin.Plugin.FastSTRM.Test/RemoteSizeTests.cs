@@ -150,6 +150,16 @@ public class RemoteSizeTests
         Assert.False(fullProbe);
     }
 
+    [Fact]
+    public void NewItem_NonStrmItemIsNeverHandled()
+    {
+        // 非 .strm 条目没有远端大小可补：判定函数必须是全函数，不能被调用点漏掉的类型过滤绕进来。
+        var item = new Video { Path = "/media/movie.mkv", Size = null };
+
+        Assert.False(ProbeService.ShouldHandleNewItem(item, autoProbeEnabled: true, out var fullProbe));
+        Assert.False(fullProbe);
+    }
+
     // ── 触发点 2：起播后补探测 ──
 
     [Fact]
@@ -158,7 +168,7 @@ public class RemoteSizeTests
         // 回归：旧实现遇到已有流信息直接 return，这类条目永远补不上大小。
         var item = new Video { Path = "/media/movie.strm", Size = 180, RunTimeTicks = 12_000_000 };
 
-        Assert.True(ProbeService.ShouldHandlePlaybackProbe(item, out var fullProbe));
+        Assert.True(ProbeService.ShouldHandlePlaybackProbe(item, BackgroundProbe, out var fullProbe));
         Assert.False(fullProbe);
     }
 
@@ -167,7 +177,7 @@ public class RemoteSizeTests
     {
         var item = new Video { Path = "/media/movie.strm", Size = 180 };
 
-        Assert.True(ProbeService.ShouldHandlePlaybackProbe(item, out var fullProbe));
+        Assert.True(ProbeService.ShouldHandlePlaybackProbe(item, BackgroundProbe, out var fullProbe));
         Assert.True(fullProbe);
     }
 
@@ -176,7 +186,42 @@ public class RemoteSizeTests
     {
         var item = new Video { Path = "/media/movie.strm", Size = 8L * 1024 * 1024, RunTimeTicks = 12_000_000 };
 
-        Assert.False(ProbeService.ShouldHandlePlaybackProbe(item, out var fullProbe));
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(item, BackgroundProbe, out var fullProbe));
+        Assert.False(fullProbe);
+    }
+
+    [Fact]
+    public void PlaybackProbe_IsRejectedByOfficialProbePolicy()
+    {
+        // 「官方探测」不是补全的触发点：交给 Jellyfin 自己 ffprobe，不额外请求流地址。
+        var probed = new Video { Path = "/media/movie.strm", Size = 180, RunTimeTicks = 12_000_000 };
+        var unprobed = new Video { Path = "/media/movie.strm", Size = 180 };
+
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(probed, OfficialProbe, out var probedFull));
+        Assert.False(probedFull);
+
+        // 无流条目在官方探测下由 Jellyfin 自己探测，同样不能顺带补大小。
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(unprobed, OfficialProbe, out var unprobedFull));
+        Assert.False(unprobedFull);
+    }
+
+    [Fact]
+    public void PlaybackProbe_IsRejectedByNoProbePolicy()
+    {
+        // 「不探测」连探测都跳过，更不补全大小。
+        var probed = new Video { Path = "/media/movie.strm", Size = 180, RunTimeTicks = 12_000_000 };
+        var unprobed = new Video { Path = "/media/movie.strm", Size = 180 };
+
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(probed, NoProbe, out _));
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(unprobed, NoProbe, out _));
+    }
+
+    [Fact]
+    public void PlaybackProbe_RejectsNonStrmItem()
+    {
+        var item = new Video { Path = "/media/movie.mkv", Size = 180 };
+
+        Assert.False(ProbeService.ShouldHandlePlaybackProbe(item, BackgroundProbe, out var fullProbe));
         Assert.False(fullProbe);
     }
 
@@ -244,6 +289,116 @@ public class RemoteSizeTests
             File.Delete(path);
         }
     }
+
+    // ── 触发矩阵：只有四个登记过的场景允许补全 ──
+
+    [Theory]
+    [InlineData(RemoteSizeTrigger.ItemAdded, true)]
+    [InlineData(RemoteSizeTrigger.PlaybackProbe, true)]
+    [InlineData(RemoteSizeTrigger.ManualIncrementalProbe, true)]
+    [InlineData(RemoteSizeTrigger.ManualFullProbe, true)]
+    [InlineData(RemoteSizeTrigger.None, false)]
+    public void TriggerPolicy_AllowsOnlyTheFourProbeScenarios(RemoteSizeTrigger trigger, bool expected)
+        => Assert.Equal(expected, RemoteSizeTriggerPolicy.AllowsSizeFill(trigger));
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(-1)]
+    [InlineData(int.MaxValue)]
+    public void TriggerPolicy_RejectsUndefinedTriggerValues(int raw)
+    {
+        // 强转出来的未定义值必须落在「不允许」一侧，避免新调用点传错参数就变成误触发。
+        var trigger = (RemoteSizeTrigger)raw;
+
+        Assert.False(RemoteSizeTriggerPolicy.AllowsSizeFill(trigger));
+        Assert.False(RemoteSizeTriggerPolicy.RequiresRefresh(trigger));
+        Assert.False(string.IsNullOrWhiteSpace(RemoteSizeTriggerPolicy.Describe(trigger)));
+    }
+
+    [Fact]
+    public void TriggerPolicy_ForcesRefreshOnlyForFullProbe()
+    {
+        Assert.True(RemoteSizeTriggerPolicy.RequiresRefresh(RemoteSizeTrigger.ManualFullProbe));
+
+        Assert.False(RemoteSizeTriggerPolicy.RequiresRefresh(RemoteSizeTrigger.ManualIncrementalProbe));
+        Assert.False(RemoteSizeTriggerPolicy.RequiresRefresh(RemoteSizeTrigger.ItemAdded));
+        Assert.False(RemoteSizeTriggerPolicy.RequiresRefresh(RemoteSizeTrigger.PlaybackProbe));
+        Assert.False(RemoteSizeTriggerPolicy.RequiresRefresh(RemoteSizeTrigger.None));
+    }
+
+    [Theory]
+    [InlineData("Full", RemoteSizeTrigger.ManualFullProbe)]
+    [InlineData("full", RemoteSizeTrigger.ManualFullProbe)]
+    [InlineData("Incremental", RemoteSizeTrigger.ManualIncrementalProbe)]
+    [InlineData("incremental", RemoteSizeTrigger.ManualIncrementalProbe)]
+    [InlineData(null, RemoteSizeTrigger.ManualIncrementalProbe)]
+    [InlineData("", RemoteSizeTrigger.ManualIncrementalProbe)]
+    [InlineData("SizeOnly", RemoteSizeTrigger.ManualIncrementalProbe)]
+    public void ProbeMode_MapsToManualTrigger(string? mode, RemoteSizeTrigger expected)
+        => Assert.Equal(expected, ProbeService.GetRemoteSizeTrigger(mode));
+
+    [Theory]
+    [InlineData("Full")]
+    [InlineData("Incremental")]
+    public void ManualProbeModes_AreAllowedToFillSize(string mode)
+    {
+        // 手动增量 / 全量探测是四个允许场景里的两个：模式一进来就必须允许补全。
+        Assert.True(RemoteSizeTriggerPolicy.AllowsSizeFill(ProbeService.GetRemoteSizeTrigger(mode)));
+    }
+
+    // ── 边界：阈值与「已补全」的判定 ──
+
+    [Fact]
+    public void IsRemoteSizeMissing_BoundaryAtAcceptableMinimum()
+    {
+        var path = WriteStrm("http://example.invalid/movie.mkv\n");
+        try
+        {
+            var fileLength = new FileInfo(path).Length;
+
+            // 恰好等于接受下限、且与 .strm 文本长度不同：已经是一次成功的补全结果。
+            var atMinimum = new Video { Path = path, Size = RemoteSizeService.MinAcceptableRemoteSize };
+            Assert.True(atMinimum.Size != fileLength);
+            Assert.False(RemoteSizeService.IsRemoteSizeMissing(atMinimum));
+
+            // 比下限还小：只可能是 .strm 文本文件本身，必须继续算缺失（不读文件即可判定）。
+            var belowMinimum = new Video { Path = path, Size = RemoteSizeService.MinAcceptableRemoteSize - 1 };
+            Assert.True(RemoteSizeService.IsRemoteSizeMissing(belowMinimum));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void IsRemoteSizeMissing_TrueWhenStrmFileIsUnreadable()
+    {
+        // 读不到 .strm 时宁可多补一次，也不能把真实缺失藏起来。
+        var item = new Video { Path = Path.Combine(Path.GetTempPath(), "faststrm-missing-" + Guid.NewGuid().ToString("N") + ".strm"), Size = 500L * 1024L };
+
+        Assert.True(RemoteSizeService.IsRemoteSizeMissing(item));
+    }
+
+    // ── 播放策略构造器 ──
+
+    /// <summary>「跳过探测 · 后台补探测」：唯一允许起播后补探测的策略。</summary>
+    private static EffectivePlaybackPolicy BackgroundProbe { get; } = Policy(skipProbe: true, backgroundProbe: true);
+
+    /// <summary>「跳过探测 · 不补探测」。</summary>
+    private static EffectivePlaybackPolicy NoProbe { get; } = Policy(skipProbe: true, backgroundProbe: false);
+
+    /// <summary>「官方探测」：交给 Jellyfin 自己 ffprobe。</summary>
+    private static EffectivePlaybackPolicy OfficialProbe { get; } = Policy(skipProbe: false, backgroundProbe: false);
+
+    private static EffectivePlaybackPolicy Policy(bool skipProbe, bool backgroundProbe)
+        => new(
+            skipProbe,
+            skipProbe && backgroundProbe,
+            PluginConfiguration.DefaultBackgroundProbeDelaySeconds,
+            PluginConfiguration.DefaultCancelBackgroundProbeOnPlaybackStop,
+            PlaybackPolicySource.Global,
+            null);
 
     private static string WriteStrm(string content)
     {

@@ -66,11 +66,12 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 
 媒体信息页显示的大小在 100～300 字节上下，说明条目里存的还是**`.strm` 文本文件本身的大小**——Jellyfin 探测 `.strm` 时探测对象就是这个文件，ffprobe 也报不出远端真实长度（HTTP 流通常是 `size=N/A`）。
 
-补全远端大小没有开关（3.6.1 起配置页只保留请求超时），但**只有三条探测链路会触发**，其余场景（取源 PlaybackInfo、浏览详情页、「官方探测」/「不补探测」策略）一律不请求流地址：
+补全远端大小没有开关（3.6.1 起配置页只保留请求超时），但**只有下面这四个探测场景会触发**，其余场景（取源 PlaybackInfo、浏览详情页、「官方探测」/「不补探测」策略）一律不请求流地址：
 
 1. **入库自动探测**（`Strm入库自动探测` 开启时）：新条目入库即补；
 2. **起播后补探测**（「跳过探测 · 后台补探测」策略）：已有流信息但缺大小的条目只发一次头部请求，不重跑 ffprobe，也不会因停播被取消；
-3. **手动增量 / 全量探测**：想一次性修好历史条目，控制台启动 **增量探测**（只对缺大小的条目发头部请求），等价于 `POST /FastStrm/Probe/Start?mode=Incremental`；需要全部覆盖用 **全量探测**（`mode=Full`）。
+3. **手动增量探测**：只对缺流信息或缺大小的条目动作，等价于 `POST /FastStrm/Probe/Start?mode=Incremental`；
+4. **手动全量探测**：全部条目重新解析并覆盖已有大小，等价于 `POST /FastStrm/Probe/Start?mode=Full`。
 
 默认配置下 `Strm入库自动探测` 与「后台补探测」都是关闭的，此时只有手动探测会触发补全——这是预期行为，不是功能失效。控制台「缺少文件大小」计数应随探测下降。
 
@@ -84,7 +85,7 @@ System.Net.Http.HttpRequestException: Response status code does not indicate suc
 | `Wrote the remote size of ...` | 补全成功并写库 |
 | `Could not resolve the remote size of ...` | 补全已触发，但源站没给出可用长度；看后面附的脱敏地址与三项排查建议 |
 | `No usable http(s) URL in the .strm file` | `.strm` 内容不合法，请求根本没发出去 |
-| 以上都没有，且控制台计数不降 | 该条目不缺大小阈值内的问题，或三条触发链路都没开启（见上文） |
+| 以上都没有，且控制台计数不降 | 该条目不缺大小阈值内的问题，或上面这些触发场景都没开启（见上文） |
 
 一次失败会先试 `HEAD`、再试 `Range: bytes=0-0`，各占用一个「大小请求超时」（默认 10 秒），所以源站不响应时整轮探测可能多等约 20 秒，属正常现象。
 

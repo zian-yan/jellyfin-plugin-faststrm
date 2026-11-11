@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using FastSTRM.Common;
+using FastSTRM.Configuration;
 using FastSTRM.Probing;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Dto;
@@ -151,7 +152,10 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
             // 而且没有用户上下文时退回全局策略还可能违背用户级的「不补探测」。
             // The official-probe fallback (skip disabled) handles probing itself, so no background
             // probe is scheduled in that mode either.
-            var backgroundProbeDelaySeconds = policy.ShouldProbeInBackground && playingUserId.HasValue
+            // 是否调度与「起播后补探测」共用同一个判定（含策略维度），这里不再自己拼条件：
+            // 「官方探测」「不探测」策略、非 .strm 条目、大小已补全的条目都不会触发。
+            var backgroundProbeDelaySeconds = playingUserId.HasValue
+                && ProbeService.ShouldHandlePlaybackProbe(item, policy, out _)
                 ? policy.BackgroundProbeDelaySeconds
                 : (int?)null;
 
@@ -184,7 +188,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
 
             if (backgroundProbeDelaySeconds.HasValue)
             {
-                ScheduleBackgroundProbe(item, backgroundProbeDelaySeconds.Value);
+                ScheduleBackgroundProbe(item, policy, backgroundProbeDelaySeconds.Value);
             }
 
             return false;
@@ -250,11 +254,11 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
         return null;
     }
 
-    private void ScheduleBackgroundProbe(BaseItem item, int delaySeconds)
+    private void ScheduleBackgroundProbe(BaseItem item, EffectivePlaybackPolicy policy, int delaySeconds)
     {
         try
         {
-            _serviceProvider.GetService<ProbeService>()?.SchedulePlaybackProbe(item, delaySeconds);
+            _serviceProvider.GetService<ProbeService>()?.SchedulePlaybackProbe(item, policy, delaySeconds);
         }
         catch (Exception ex)
         {

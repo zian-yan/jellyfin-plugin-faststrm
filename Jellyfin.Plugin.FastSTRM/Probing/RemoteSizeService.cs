@@ -235,9 +235,10 @@ public sealed class RemoteSizeService : IDisposable
     /// Applies an already known size to media sources for display only.
     /// </summary>
     /// <remarks>
-    /// <b>Never triggers a lookup.</b> 补全远端文件大小只允许由三条探测链路发起：入库自动探测、
-    /// 起播后补探测、手动增量/全量探测。取源（PlaybackInfo）与浏览详情页都属于「其他情况」，
-    /// 这里只读进程内缓存，缓存未命中就保持数据库现值，绝不排队、绝不发请求。
+    /// <b>Never triggers a lookup.</b> 补全远端文件大小只允许由 <see cref="RemoteSizeTrigger"/> 里
+    /// 登记的场景发起：入库自动探测、起播后补探测、手动增量探测、手动全量探测。取源（PlaybackInfo）
+    /// 与浏览详情页都属于「其他情况」，这里只读进程内缓存，缓存未命中就保持数据库现值，
+    /// 绝不排队、绝不发请求。
     /// </remarks>
     public void ApplyCachedSizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
@@ -266,27 +267,47 @@ public sealed class RemoteSizeService : IDisposable
     /// Returns the size on success, or null when it could not be determined.
     /// </summary>
     /// <param name="item">The .strm item.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <param name="force">
-    /// Re-resolve and overwrite even when the stored size already looks plausible. Set by the
-    /// full-library probe, whose contract is to replace every field with fresh data. All other
-    /// entry points pass <c>false</c>, so an item that already has a real size is never resolved
-    /// twice — no .strm read and no request to the stream endpoint. A forced run still reuses a
-    /// URL cache entry that is younger than <see cref="ForceReuseWindow"/>, so items sharing one
-    /// URL cost a single request inside the same run.
+    /// <param name="trigger">
+    /// 触发来源，见 <see cref="RemoteSizeTrigger"/>。这是补全的**准入凭证**：
+    /// 只有入库自动探测、起播后补探测、手动增量探测、手动全量探测会补全，
+    /// 其余来源（含 <see cref="RemoteSizeTrigger.None"/> 与未定义值）直接返回
+    /// <c>null</c>，不读 .strm、不发请求、不写库。判定集中在
+    /// <see cref="RemoteSizeTriggerPolicy.AllowsSizeFill"/>，调用点无法绕过。
     /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
+    /// <para>
+    /// 「是否重新解析」由来源推导（见 <see cref="RemoteSizeTriggerPolicy.RequiresRefresh"/>），
+    /// 不再是独立参数：全量探测重新解析并覆盖，其余三个来源只补仍然缺失的大小，
+    /// 因此一个已有真实大小的条目不会被重复解析。
+    /// </para>
+    /// <para>
     /// When the .strm file is replaced, the next library scan resets <see cref="BaseItem.Size"/>
     /// to the length of the new text file, so the item falls back under
-    /// <see cref="NeedsRemoteSize"/> and is resolved again automatically even without
-    /// <paramref name="force"/>.
+    /// <see cref="NeedsRemoteSize"/> and is resolved again automatically by the next probe run.
+    /// </para>
     /// </remarks>
-    public async Task<long?> ResolveAsync(BaseItem item, CancellationToken cancellationToken, bool force = false)
+    public async Task<long?> ResolveAsync(
+        BaseItem item,
+        RemoteSizeTrigger trigger,
+        CancellationToken cancellationToken)
     {
+        // 准入判定放在最前面：来源不合法时连 .strm 都不读，杜绝任何「顺手补一次」的路径。
+        if (!RemoteSizeTriggerPolicy.AllowsSizeFill(trigger))
+        {
+            _logger.LogDebug(
+                "FastSTRM: Not resolving the remote size of {Name}; {Trigger} is not a probe trigger",
+                LogSafe.Name(item),
+                RemoteSizeTriggerPolicy.Describe(trigger));
+            return null;
+        }
+
         if (!IsStrmItem(item))
         {
             return null;
         }
+
+        var force = RemoteSizeTriggerPolicy.RequiresRefresh(trigger);
 
         if (!force && !NeedsRemoteSize(item))
         {

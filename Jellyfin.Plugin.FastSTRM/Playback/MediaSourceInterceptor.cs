@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FastSTRM.Common;
+using FastSTRM.Configuration;
 using FastSTRM.Probing;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
@@ -82,7 +83,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     ///    the policy asks for it, after the policy's delay (default: no background probe).
     /// 4. 取源本身**不触发**远端大小补全，只用进程内缓存修正展示值；真正的补全由「起播后补探测」
     ///    （<see cref="ProbeService.SchedulePlaybackProbe"/>）承担，只有「跳过探测 · 后台补探测」
-    ///    策略才会调度。「官方探测」「不补探测」以及浏览详情页都不发这次请求。
+    ///    策略才会调度。「官方探测」「不补探测」以及浏览详情页都不发这次请求——判定收敛在
+    ///    <see cref="ProbeService.ShouldHandlePlaybackProbe"/>，不再由调用点各自拼条件。
     /// </summary>
     public async Task<IReadOnlyList<MediaSourceInfo>> GetPlaybackMediaSources(
         BaseItem item,
@@ -137,14 +139,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             .ConfigureAwait(false);
 
         int? backgroundProbeDelaySeconds = null;
-        if (policy.ShouldProbeInBackground
-            && ProbeService.ShouldHandlePlaybackProbe(item, out _))
+        if (ProbeService.ShouldHandlePlaybackProbe(item, policy, out _))
         {
             // 「起播后补探测」既补时长/轨道，也补全远端大小：已有流信息但大小仍是 .strm
             // 文本大小的条目同样要调度，否则这类条目永远补不上。
             // 调度放在取源之后，避免响应与后台刷新同时写同一个条目。
+            // 「官方探测」「不探测」在 ShouldHandlePlaybackProbe 里就被拒掉，不会走到这里。
             backgroundProbeDelaySeconds = policy.BackgroundProbeDelaySeconds;
-            ScheduleBackgroundProbe(item, backgroundProbeDelaySeconds.Value);
+            ScheduleBackgroundProbe(item, policy, backgroundProbeDelaySeconds.Value);
         }
 
         WarnIfStreamInfoMissing(item, hasStreamInfo, sources, backgroundProbeDelaySeconds);
@@ -155,11 +157,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return sources;
     }
 
-    private void ScheduleBackgroundProbe(BaseItem item, int delaySeconds)
+    private void ScheduleBackgroundProbe(BaseItem item, EffectivePlaybackPolicy policy, int delaySeconds)
     {
         try
         {
-            _serviceProvider.GetService<ProbeService>()?.SchedulePlaybackProbe(item, delaySeconds);
+            _serviceProvider.GetService<ProbeService>()?.SchedulePlaybackProbe(item, policy, delaySeconds);
         }
         catch (Exception ex)
         {

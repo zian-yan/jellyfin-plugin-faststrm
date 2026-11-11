@@ -352,23 +352,63 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// 库扫描往往已经给新条目写入了流信息，但大小仍是那个几百字节的 .strm 文本文件，
     /// 这类条目不能因为「已有流信息」被整条丢掉。抽成纯函数便于覆盖「入库自动探测开启时
     /// 补全是否触发、关闭时其他情况是否一律不触发」这一回归点。
+    /// 「入库自动探测」关闭 = 入库链路整体不动作，此时连大小也不补。
     /// </remarks>
     internal static bool ShouldHandleNewItem(BaseItem item, bool autoProbeEnabled, out bool runFullProbe)
     {
-        runFullProbe = autoProbeEnabled && !HasStreamInfo(item);
-        return autoProbeEnabled
-               && (runFullProbe || RemoteSizeService.NeedsRemoteSize(item));
+        runFullProbe = false;
+
+        if (!autoProbeEnabled || !IsStrmItem(item))
+        {
+            // 非 .strm 条目永远不进入这条链路（补全只对 .strm 有意义），
+            // 因此调用点即使漏掉类型过滤也不会产生误触发。
+            return false;
+        }
+
+        runFullProbe = !HasStreamInfo(item);
+        return runFullProbe || RemoteSizeService.IsRemoteSizeMissing(item);
     }
 
     /// <summary>
     /// 「起播后补探测」是否需要处理该条目，以及是否要跑 ffprobe。
-    /// 取源链路与 <see cref="SchedulePlaybackProbe"/> 共用这一判定，避免两处条件漂移。
+    /// 取源链路、进度上报与 <see cref="SchedulePlaybackProbe"/> 共用这一判定，避免三处条件漂移。
     /// </summary>
-    internal static bool ShouldHandlePlaybackProbe(BaseItem item, out bool runFullProbe)
+    /// <param name="item">正在播放的条目。</param>
+    /// <param name="policy">本次播放生效的策略。</param>
+    /// <param name="runFullProbe">是否需要完整 ffprobe（无流信息时）。</param>
+    /// <returns>
+    /// 只有「跳过探测 · 后台补探测」（<see cref="EffectivePlaybackPolicy.ShouldProbeInBackground"/>）
+    /// 才可能返回 <c>true</c>。「官方探测」交给 Jellyfin 自己 ffprobe、「不探测」连探测都跳过，
+    /// 两者都不是补全远端大小的触发点，返回 <c>false</c> 且 <paramref name="runFullProbe"/> 为 <c>false</c>。
+    /// </returns>
+    internal static bool ShouldHandlePlaybackProbe(
+        BaseItem item,
+        EffectivePlaybackPolicy policy,
+        out bool runFullProbe)
     {
+        runFullProbe = false;
+
+        if (!policy.ShouldProbeInBackground || !IsStrmItem(item))
+        {
+            return false;
+        }
+
         runFullProbe = !HasStreamInfo(item);
         return runFullProbe || RemoteSizeService.IsRemoteSizeMissing(item);
     }
+
+    /// <summary>
+    /// 把探测模式映射为补全远端大小的触发来源。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="StartProbe"/> 已用 <see cref="TryParseMode"/> 归一化过模式，
+    /// 这里只做一次等价映射：<see cref="FullMode"/> → 手动全量，其余（含空值）→ 手动增量。
+    /// 「是否重新解析已有大小」随之由来源推导，避免模式与 force 两个真值来源打架。
+    /// </remarks>
+    internal static RemoteSizeTrigger GetRemoteSizeTrigger(string? mode)
+        => string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase)
+            ? RemoteSizeTrigger.ManualFullProbe
+            : RemoteSizeTrigger.ManualIncrementalProbe;
 
     private async Task RunAutoProbeAsync(BaseItem item, bool runFullProbe, CancellationToken cancellationToken)
     {
@@ -381,9 +421,9 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             if (runFullProbe)
             {
-                // ProbeItemAsync 在官方探测之后顺带补写远端大小。
+                // ProbeItemAsync 在官方探测之后顺带补写远端大小（来源：入库自动探测）。
                 _logger.LogInformation("FastSTRM: Auto-probing new item {Name}", LogSafe.Name(item, MaxLoggedNameLength));
-                await ProbeItemAsync(item, cancellationToken).ConfigureAwait(false);
+                await ProbeItemAsync(item, RemoteSizeTrigger.ItemAdded, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -391,7 +431,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 _logger.LogDebug(
                     "FastSTRM: Filling in the remote size of new item {Name}",
                     LogSafe.Name(item, MaxLoggedNameLength));
-                await FillRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
+                await FillRemoteSizeAsync(item, RemoteSizeTrigger.ItemAdded, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -719,25 +759,30 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// times at short intervals before giving up until the next playback.
     /// </summary>
     /// <param name="item">The item that is being played.</param>
+    /// <param name="policy">
+    /// 本次播放生效的策略。「官方探测」「不探测」在这里就被拒掉：
+    /// 它们不是补全远端大小的触发点，<see cref="ShouldHandlePlaybackProbe"/> 会返回 <c>false</c>。
+    /// </param>
     /// <param name="delaySeconds">Seconds to wait after playback started before probing.</param>
-    public void SchedulePlaybackProbe(BaseItem item, int delaySeconds)
+    /// <returns><c>true</c> when a background probe was scheduled.</returns>
+    public bool SchedulePlaybackProbe(BaseItem item, EffectivePlaybackPolicy policy, int delaySeconds)
     {
-        if (_stopping || !IsStrmItem(item))
+        if (_stopping)
         {
-            return;
+            return false;
         }
 
         // A running batch probe already covers these items; do not touch the same item twice.
         if (State != "Idle")
         {
-            return;
+            return false;
         }
 
         // 旧实现遇到「已有流信息」直接 return，导致这类条目永远补不上大小：
         // 它们没有 ffprobe 需求，但大小仍是 .strm 文本文件的几百字节。
-        if (!ShouldHandlePlaybackProbe(item, out var runFullProbe))
+        if (!ShouldHandlePlaybackProbe(item, policy, out var runFullProbe))
         {
-            return;
+            return false;
         }
 
         var now = DateTime.UtcNow;
@@ -745,12 +790,12 @@ public sealed class ProbeService : IHostedService, IDisposable
         if (_lastPlaybackProbeAttemptUtc.TryGetValue(item.Id, out var lastAttempt)
             && now - lastAttempt < PlaybackProbeRetryInterval)
         {
-            return;
+            return false;
         }
 
         if (!_playbackProbeInFlight.TryAdd(item.Id, 0))
         {
-            return;
+            return false;
         }
 
         CancellationTokenSource? probeCts = null;
@@ -780,6 +825,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                 // task in the map (shutdown would otherwise keep awaiting stale entries).
                 _playbackProbeTasks.TryRemove(item.Id, out _);
             }
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -797,6 +844,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             _logger.LogDebug(ex, "FastSTRM: Unable to schedule a background probe for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
+            return false;
         }
     }
 
@@ -830,7 +878,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 long? size;
                 try
                 {
-                    size = await FillRemoteSizeAsync(item, token).ConfigureAwait(false);
+                    size = await FillRemoteSizeAsync(item, RemoteSizeTrigger.PlaybackProbe, token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -884,7 +932,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 var gate = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
                 try
                 {
-                    await ProbeItemAsync(item, token).ConfigureAwait(false);
+                    await ProbeItemAsync(item, RemoteSizeTrigger.PlaybackProbe, token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -957,10 +1005,11 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         try
         {
-            // Full mode is a complete refresh: every field is replaced with freshly probed data,
-            // so the remote size is re-resolved even when a plausible one is already stored.
-            var forceRemoteSize = string.Equals(mode, FullMode, StringComparison.OrdinalIgnoreCase);
-            var incremental = !forceRemoteSize;
+            // 全量探测的契约是「每个字段都用新探测的数据覆盖」，所以它重新解析远端大小；
+            // 增量探测只补仍然缺失的大小。这个差异由触发来源推导，不再另传一个 force 参数，
+            // 因此不会出现「模式是增量、却按全量覆盖」这类漂移。
+            var trigger = GetRemoteSizeTrigger(mode);
+            var incremental = trigger == RemoteSizeTrigger.ManualIncrementalProbe;
 
             // The library scan stays off the caller's lock: on a large library it takes seconds
             // and would otherwise block StopProbe and this task's own finally block.
@@ -1009,11 +1058,11 @@ public sealed class ProbeService : IHostedService, IDisposable
                     if (incremental && HasStreamInfo(item))
                     {
                         // 已有流信息，只是大小还停在 .strm 文本文件：只补大小，不重跑 ffprobe。
-                        await FillRemoteSizeAsync(item, token).ConfigureAwait(false);
+                        await FillRemoteSizeAsync(item, trigger, token).ConfigureAwait(false);
                     }
                     else
                     {
-                        await ProbeItemAsync(item, token, forceRemoteSize).ConfigureAwait(false);
+                        await ProbeItemAsync(item, trigger, token).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
@@ -1109,7 +1158,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         gate.Release();
     }
 
-    private async Task ProbeItemAsync(BaseItem item, CancellationToken ct, bool forceRemoteSize = false)
+    private async Task ProbeItemAsync(BaseItem item, RemoteSizeTrigger trigger, CancellationToken ct)
     {
         try
         {
@@ -1133,7 +1182,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         // The official probe measures the .strm container, so the size it stores is the size of
         // the local text file. Replace it with the real remote size after the refresh.
-        await FillRemoteSizeAsync(item, ct, forceRemoteSize).ConfigureAwait(false);
+        await FillRemoteSizeAsync(item, trigger, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1141,15 +1190,29 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// Returns the size on success, or <c>null</c> when it could not be determined.
     /// Never throws (except cancellation): a failing size lookup must not fail the surrounding probe.
     /// </summary>
+    /// <param name="item">The .strm item.</param>
+    /// <param name="trigger">
+    /// 触发来源。补全的准入判定在这里先做一次，再由
+    /// <see cref="RemoteSizeService.ResolveAsync"/> 复核：未登记的来源不会读 .strm、不发请求。
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
-    /// 这是补全远端文件大小的**唯一执行入口**：入库自动探测、起播后补探测、手动增量/全量探测
-    /// 三条链路都汇到这里，取源与浏览详情页不调用它，因此不会产生额外的流地址请求。
+    /// 这是补全远端文件大小的**唯一执行入口**：入库自动探测、起播后补探测、手动增量探测、
+    /// 手动全量探测四条链路都汇到这里，取源与浏览详情页不调用它，因此不会产生额外的流地址请求。
     /// </remarks>
-    private async Task<long?> FillRemoteSizeAsync(BaseItem item, CancellationToken ct, bool force = false)
+    private async Task<long?> FillRemoteSizeAsync(
+        BaseItem item,
+        RemoteSizeTrigger trigger,
+        CancellationToken ct)
     {
+        if (!RemoteSizeTriggerPolicy.AllowsSizeFill(trigger))
+        {
+            return null;
+        }
+
         try
         {
-            return await _remoteSize.ResolveAsync(item, ct, force).ConfigureAwait(false);
+            return await _remoteSize.ResolveAsync(item, trigger, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
