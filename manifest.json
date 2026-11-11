@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.2.0",
+        "changelog": "### 修复\n\n- 补全远端文件大小现在只在三条探测链路触发：入库自动探测、起播后补探测、手动增量/全量探测；取源（PlaybackInfo）与浏览详情页只读缓存，不再排队或发请求。\n- 修复已有流信息但大小仍是 `.strm` 文本大小的条目在「起播后补探测」下永远补不上的问题：旧代码遇到 `HasStreamInfo` 直接跳过整个后台补探测。\n- 「缺少文件大小」计数不再把 4 KiB–1 MiB 的短片、音乐视频等已写入的真实大小算作缺失。\n- 写库失败时回滚内存中的大小，避免缓存显示已补全、数据库仍是旧值且不再重试。\n\n### 优化\n\n- 补全动作收敛到唯一入口 `ProbeService.FillRemoteSizeAsync`，移除 `RemoteSizeService` 的后台调度与节流队列。\n- 补充触发判定、统计口径与「非触发场景不发请求」的单元测试。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.2/FastSTRM.zip",
+        "checksum": "36cd88885b5b1eaabbcfbd2f987ca900",
+        "timestamp": "2026-11-11T10:40:14Z"
+      },
+      {
         "version": "3.6.1.0",
         "changelog": "### 变更\n\n- 移除配置页「补全远端文件大小」开关：该功能固定启用，配置页只保留请求超时与内网地址选项。\n- 配置页移除所有选项说明文字，只保留标签与控件。\n- 浏览条目详情不再触发大小补全：无论何种播放策略，详情页都只读进程内缓存、不发任何流地址请求；补全只在入库自动探测、后台补探测、增量探测与全量探测中发生。\n\n### 移除\n\n- `/FastStrm/Summary` 不再返回 `EnableRemoteSize` 字段；旧配置文件里的同名键在下次保存时自动消失。\n\n---",
         "targetAbi": "12.0.0.0",
