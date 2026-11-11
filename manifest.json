@@ -18,7 +18,7 @@
       },
       {
         "version": "3.6.1.0",
-        "changelog": "### 变更\n\n- 移除配置页「补全远端文件大小」开关：该功能固定启用，配置页只保留请求超时与内网地址选项。\n- 配置页移除所有选项说明文字，只保留标签与控件。\n- 浏览条目详情不再触发大小补全：无论何种播放策略，详情页都只读进程内缓存、不发任何流地址请求；补全只在入库自动探测、后台补探测、增量探测与全量探测中发生。\n\n### 移除\n\n- `/FastStrm/Summary` 不再返回 `EnableRemoteSize` 字段；旧配置文件里的同名键在下次保存时自动消失。\n\n---",
+        "changelog": "### 变更\n\n- 移除配置页「补全远端文件大小」开关，该功能固定启用。\n- 配置页只保留请求超时与内网地址选项，并去掉全部说明文字。\n- 浏览详情页不再触发远端大小补全，只读进程内缓存。\n\n### 移除\n\n- `/FastStrm/Summary` 不再返回 `EnableRemoteSize` 字段。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.1/FastSTRM.zip",
         "checksum": "6af878ae4147bcafbcd26e12a8d9276c",
@@ -26,7 +26,7 @@
       },
       {
         "version": "3.6.0.0",
-        "changelog": "### 变更\n\n- 补全远端文件大小并入入库自动探测、后台补探测、增量探测与全量探测：探测结束即写入，不再有独立入口。\n- 移除「仅补全文件大小」探测模式与 `mode=SizeOnly` 接口值，再传该值会被拒绝（400）。\n- 增量探测顺带补齐「已有流信息、但大小仍是 `.strm` 文本大小」的条目：只发头部请求，不重跑 ffprobe。\n- 入库自动探测同样覆盖这类条目：库扫描已探测过的 `.strm` 不再被「已有流信息」整条跳过，只补大小。\n\n### 修复\n\n- 这类条目此前在「官方探测 / 不补探测」策略下永远不会被补全，控制台「缺少文件大小」计数无法清零。\n\n---",
+        "changelog": "### 变更\n\n- 远端大小补全并入入库自动探测、后台补探测、增量探测与全量探测，探测结束即写入。\n- 移除「仅补全文件大小」模式，再传 `mode=SizeOnly` 会被拒绝（400）。\n- 增量探测补齐「已有流信息但缺大小」的条目，只发头部请求，不重跑 ffprobe。\n- 入库自动探测同样覆盖这类条目，不再因「已有流信息」整条跳过。\n\n### 修复\n\n- 这类条目此前在「官方探测 / 不补探测」下永远不会补全，控制台计数无法清零。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.0/FastSTRM.zip",
         "checksum": "d51e89406f8461ec9ddd63d5deabc5f4",
@@ -34,7 +34,7 @@
       },
       {
         "version": "3.5.3.0",
-        "changelog": "### 修复\n\n- 「补全远端文件大小」不再在「官方探测」与「不补探测」策略下运行：起播与浏览详情都不再请求流地址；只有「跳过探测 · 后台补探测」以及手动批量探测、仅补全文件大小才会运行。\n- 配置页说明同步标明该功能的生效范围。\n\n---",
+        "changelog": "### 变更\n\n- 「官方探测」与「不补探测」策略下不再补全远端大小，起播与详情页都不请求流地址。\n- 补全只在「跳过探测 · 后台补探测」与手动批量探测下运行，配置页说明同步标明范围。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.3/FastSTRM.zip",
         "checksum": "d5625fecf0fd4b6446a26b0289eaf0c6",
@@ -42,7 +42,7 @@
       },
       {
         "version": "3.5.2.0",
-        "changelog": "### 安全\n\n- 补全远端文件大小时增加目标地址校验：链路本地地址、组播地址与保留网段一律拒绝，避免有人通过写入 strm 文件让插件去请求内网探测端点。\n- 域名解析结果与重定向目标落在同一校验范围内，可阻断域名重绑定；重定向跳数由 5 次降为 3 次。\n- 新增开关，可将内网访问范围收紧为仅公网。\n\n### 修复\n\n- 全量探测真正重新解析远端大小，不再复用旧缓存结果。\n- 修复小于 1 MB 的短片、音乐视频永远补不上大小的问题，补全下限降至 4 KB。\n- 单次请求超时不再中断整个补全流程，改用轻量请求兜底，并且每个请求独立计时。\n- 修复补全结果与数据库记录长期不一致的问题。\n- 服务关闭瞬间到达的入库事件不再抛出异常。\n\n### 优化\n\n- 播放策略解析减少重复计算，配置未变化时直接跳过。\n\n### 测试\n\n- 补充地址分级校验与远端大小请求链路的单元测试。",
+        "changelog": "### 安全\n\n- 补全远端大小时校验目标地址，链路本地、组播与保留网段一律拒绝，防止 `.strm` 把请求引向内网探测端点。\n- 域名解析结果与重定向目标同在校验范围内，可阻断域名重绑定。\n- 重定向跳数由 5 次降为 3 次。\n- 新增开关，可将内网访问收紧为仅公网。\n\n### 修复\n\n- 全量探测重新解析远端大小，不再复用旧缓存。\n- 补全下限降至 4 KB，短片与音乐视频不再永远补不上大小。\n- 单次请求超时不再中断整个流程，每个请求独立计时。\n- 修复补全结果与数据库记录长期不一致的问题。\n- 服务关闭瞬间到达的入库事件不再抛出异常。\n\n### 优化\n\n- 配置未变化时跳过播放策略的重复解析。\n\n### 测试\n\n- 补充地址分级校验与远端大小请求链路的单元测试。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.2/FastSTRM.zip",
         "checksum": "50bebdc63dc139392c277f6bf3fefa7f",
@@ -50,7 +50,7 @@
       },
       {
         "version": "3.5.1.0",
-        "changelog": "### 优化\n\n- 全量探测保持「完全刷新」语义，仍重新解析远端大小并覆盖已有记录。\n- 增量探测、入库自动探测、起播补探测与浏览详情，对已有可信大小的条目直接跳过，不再读文件也不请求流地址。\n- 「仅补全文件大小」只处理仍缺失的条目。\n- strm 文件被替换后，条目会自动重新进入补全，无需手动干预。",
+        "changelog": "### 优化\n\n- 全量探测保持完全刷新语义，重新解析并覆盖已有大小。\n- 增量探测、入库自动探测、起播补探测与详情页对已有可信大小的条目直接跳过。\n- 「仅补全文件大小」只处理仍缺失的条目。\n- `.strm` 文件被替换后，条目自动重新进入补全。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.1/FastSTRM.zip",
         "checksum": "337ac06ade648ef5cf4d33391695072c",
@@ -58,7 +58,7 @@
       },
       {
         "version": "3.5.0.0",
-        "changelog": "### 新增\n\n- 补全远端文件真实大小：读取 strm 内的流地址获取真实长度并写回条目，媒体信息页显示真实大小。\n- 新增「补全远端文件大小」开关与「大小请求超时」设置。\n- 新增「仅补全文件大小」探测模式，不走 ffprobe，可批量补全仍缺失大小的条目。\n- 概览统计新增「缺少文件大小」指标。\n\n### 优化\n\n- 各类探测结束后自动补写远端大小，无需再单独跑一轮任务。\n- 浏览详情或开始播放时优先使用缓存替换大小；未命中则后台补一次请求，不增加起播等待。\n- 已有可信大小的条目不会被覆盖，同一地址共用一次请求，失败后 10 分钟内不重复请求。",
+        "changelog": "### 新增\n\n- 补全远端文件真实大小：读取 `.strm` 内的流地址取长度并写回，媒体信息页显示真实大小。\n- 新增「补全远端文件大小」开关与「大小请求超时」设置。\n- 新增「仅补全文件大小」模式，不走 ffprobe，可批量补缺大小的条目。\n- 概览统计新增「缺少文件大小」指标。\n\n### 优化\n\n- 各类探测结束后自动补写远端大小，无需单独跑一轮任务。\n- 详情页与起播优先用缓存替换大小，未命中在后台补一次，不增加起播等待。\n- 已有可信大小不被覆盖，同一地址共用一次请求，失败后 10 分钟内不重复。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.5.0/FastSTRM.zip",
         "checksum": "5f4388f5d1622d79300be317b5cfc97d",
@@ -66,7 +66,7 @@
       },
       {
         "version": "3.4.2.0",
-        "changelog": "### 新增\n\n- 配置页支持多语言：跟随 Jellyfin 界面语言自动切换简体中文、繁体中文与英文。\n\n### 修复\n\n- 修复配置页下拉框与输入框内文字被垂直裁切的问题，换主题或调大字号都不再裁字。\n\n### 文档\n\n- README 拆分为英文与中文两个版本，可互相跳转。",
+        "changelog": "### 新增\n\n- 配置页支持多语言，跟随 Jellyfin 界面语言切换简体中文、繁体中文与英文。\n\n### 修复\n\n- 修复配置页下拉框与输入框内文字被垂直裁切的问题。\n\n### 文档\n\n- README 拆分为英文与中文两版，可互相跳转。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.4.2/FastSTRM.zip",
         "checksum": "c9678eade3247149e2cd203d11238149",
@@ -74,7 +74,7 @@
       },
       {
         "version": "3.4.1.0",
-        "changelog": "### 修复\n\n- 修复用户级关闭补探测、全局开启补探测时，播放停止后仍会发起补探测的问题。\n- 播放停止后的进度上报只保存进度，不再调度新的探测。",
+        "changelog": "### 修复\n\n- 播放停止后的进度上报只保存进度，不再调度新的补探测（此前用户级关闭、全局开启时仍会发起）。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.4.1/FastSTRM.zip",
         "checksum": "dd2841f1d187a10d0e6945b001cfee4b",
@@ -82,7 +82,7 @@
       },
       {
         "version": "3.4.0.0",
-        "changelog": "### 新增\n\n- 新增按用户播放策略，可为单个用户覆盖全局策略，并单独设置补探测延迟。\n- 支持查询全局策略、每个用户的生效策略及其来源，并列出已删除用户的遗留配置。\n\n### 优化\n\n- 全局默认策略统一，新安装、旧配置缺字段、配置不可用三种情况结果一致。\n- 策略解析按配置内容缓存，与播放无关的配置变更不会触发重建。\n- 用户配置非法时回退全局策略并只记一条警告，不影响播放。\n\n### 文档\n\n- 新增 Wiki：按用户播放策略。",
+        "changelog": "### 新增\n\n- 新增按用户播放策略，可覆盖全局策略并单独设置补探测延迟。\n- 支持查询全局策略、每个用户的生效策略及其来源，并列出已删除用户的遗留配置。\n\n### 优化\n\n- 统一全局默认策略，新安装、旧配置缺字段、配置不可用三种情况结果一致。\n- 策略按配置内容缓存，与播放无关的变更不会触发重建。\n- 用户配置非法时回退全局策略并只记一条警告，不影响播放。\n\n### 文档\n\n- 新增 Wiki：按用户播放策略。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.4.0/FastSTRM.zip",
         "checksum": "7c568cd02fc7697c342a2a41ee12f3ca",
@@ -90,7 +90,7 @@
       },
       {
         "version": "3.3.3.0",
-        "changelog": "### 新增\n\n- 新增探测并发数设置，批量探测按设定并发数并行处理。\n- 库概览结果默认缓存 30 秒，支持强制刷新。\n\n### 优化\n\n- 启动探测不再锁住全库扫描，停止探测不再被阻塞。\n- 日志中的条目名称统一过滤控制字符并截断，避免异常文件名伪造日志行。\n- 进度日志按时间节流，缓存清理限制频率。\n\n### 修复\n\n- 启动探测时传入非法模式会返回明确的参数错误，不再静默退化为全库探测。\n- 修复探测取消源残留与重复入库事件堆积。\n- 配置页请求补齐异常处理，探测结束后强制刷新计数。",
+        "changelog": "### 新增\n\n- 新增探测并发数设置，批量探测按设定并发并行处理。\n- 库概览默认缓存 30 秒，支持强制刷新。\n\n### 优化\n\n- 启动探测不再锁住全库扫描，停止探测不再被阻塞。\n- 日志中的条目名称统一过滤控制字符并截断，避免异常文件名伪造日志行。\n- 进度日志按时间节流，缓存清理限制频率。\n\n### 修复\n\n- 启动探测传入非法模式返回明确的参数错误，不再静默退化为全库探测。\n- 修复探测取消源残留与重复入库事件堆积。\n- 配置页请求补齐异常处理，探测结束后强制刷新计数。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.3.3/FastSTRM.zip",
         "checksum": "d2ef2df5c882779428b417d38f2bbec1",
@@ -98,7 +98,7 @@
       },
       {
         "version": "3.3.2.0",
-        "changelog": "### 修复\n\n- 修复播放标记缓存只增不减导致的长期内存增长。\n- 修复批量探测在停止过程中可重复启动、关闭时不等待任务，以及入库自动探测重复且无法取消的问题。\n- 修复多会话停止误取消补探测、共享实例被误释放，以及配置页离开后轮询被重新拉起的问题。",
+        "changelog": "### 修复\n\n- 播放标记缓存改为有上限，不再长期增长。\n- 批量探测停止过程中不能重复启动，关闭时等待任务结束。\n- 入库自动探测不再重复触发，且可被取消。\n- 多会话停止不再误取消补探测，共享实例不再被误释放。\n- 配置页离开后不再重新拉起轮询。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.3.2/FastSTRM.zip",
         "checksum": "7e4ead54cfa720c41278eaf4900825ab",
@@ -106,7 +106,7 @@
       },
       {
         "version": "3.3.1.0",
-        "changelog": "### 新增\n\n- 控制台菜单新增 FastSTRM 设置入口。\n\n### 文档\n\n- README 顶部展示 FastSTRM 横幅图片。",
+        "changelog": "### 新增\n\n- 控制台菜单新增 FastSTRM 设置入口。\n\n### 文档\n\n- README 顶部展示 FastSTRM 横幅。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.3.1/FastSTRM.zip",
         "checksum": "e56a995b21e962054fe08bcf3d87225b",
@@ -114,7 +114,7 @@
       },
       {
         "version": "3.3.0.0",
-        "changelog": "### 新增\n\n- 未探测的 strm 起播后可选择不补探测或后台补探测。\n- 后台补探测延迟可配置，默认 5 秒。\n- 新增「播放停止后取消补探测」开关。\n- 概览统计新增后台补探测相关字段。\n\n### 优化\n\n- 关闭后台补探测时保留播放位置，不再补全时长。\n\n### 变更\n\n- 未探测文件默认不再后台补探测；需要时长与轨道信息时请在配置页开启。",
+        "changelog": "### 新增\n\n- 未探测的 `.strm` 起播后可选择不补探测或后台补探测。\n- 后台补探测延迟可配置，默认 5 秒。\n- 新增「播放停止后取消补探测」开关。\n- 概览统计新增后台补探测相关字段。\n\n### 优化\n\n- 关闭后台补探测时保留播放位置，不再补全时长。\n\n### 变更\n\n- 未探测文件默认不再后台补探测，需要时长与轨道信息请在配置页开启。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.3.0/FastSTRM.zip",
         "checksum": "449d418e3fef34f69b9fd7fe20183828",
@@ -122,7 +122,7 @@
       },
       {
         "version": "3.2.3.0",
-        "changelog": "### 修复\n\n- 后台探测以时长是否写入判定成败，失败不再误报为完成。\n- 起播后延迟探测，失败按 10 秒、30 秒递增重试，最多 3 次。\n- 批量预探测运行时不再叠加单集重试。",
+        "changelog": "### 修复\n\n- 后台探测以时长是否写入判定成败，失败不再误报完成。\n- 起播后补探测失败按 10 秒、30 秒递增重试，最多 3 次。\n- 批量预探测运行时不再叠加单集重试。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.2.3/FastSTRM.zip",
         "checksum": "77acf22366de454726b7597b2e9220e4",
@@ -130,7 +130,7 @@
       },
       {
         "version": "3.2.2.0",
-        "changelog": "### 优化\n\n- 精简控制台「未探测文件也跳过探测」的说明文字。",
+        "changelog": "### 优化\n\n- 精简控制台「未探测文件也跳过探测」的说明文字。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.2.2/FastSTRM.zip",
         "checksum": "c8a260fecd2c65140868fc155bacc470",
@@ -138,7 +138,7 @@
       },
       {
         "version": "3.2.1.0",
-        "changelog": "### 修复\n\n- 修复未探测文件播放进度丢失、退出时被误标为已观看的问题。\n- 起播后在后台补充时长与流信息，探测期间进度正常保存。",
+        "changelog": "### 修复\n\n- 修复未探测的 `.strm` 播放进度丢失、退出时被误标为已观看的问题。\n- 起播后在后台补充时长与流信息，探测期间进度照常保存。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.2.1/FastSTRM.zip",
         "checksum": "96eb5081230133776d45403b6fadb0c9",
@@ -146,7 +146,7 @@
       },
       {
         "version": "3.2.0.0",
-        "changelog": "### 升级\n\n- 适配 Jellyfin 12 与 .NET 10，插件需使用 .NET 10 构建。\n- 本版本起需要 Jellyfin 12.0 及以上；Jellyfin 10.11 请继续使用 3.1.0。\n- 播放拦截、预探测、控制台面板与接口逻辑均未改动。",
+        "changelog": "### 升级\n\n- 适配 Jellyfin 12 与 .NET 10，插件需用 .NET 10 构建。\n- 本版本起需要 Jellyfin 12.0 及以上，10.11 请继续使用 3.1.0。\n- 播放拦截、预探测、控制台面板与接口逻辑均未改动。\n\n---",
         "targetAbi": "12.0.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.2.0/FastSTRM.zip",
         "checksum": "96088591d0058b46d70b38ce06a38c12",
@@ -154,7 +154,7 @@
       },
       {
         "version": "3.1.0.0",
-        "changelog": "### 新增\n\n- 未探测的 strm 在播放时同样跳过远程探测，消除首次播放的等待。\n- 新增开关，可回退到官方媒体探测作为兼容兜底。",
+        "changelog": "### 新增\n\n- 未探测的 `.strm` 播放时同样跳过远程探测，消除首次播放等待。\n- 新增开关，可回退到官方媒体探测作为兼容兜底。\n\n### 变更\n\n- 旧配置按「跳过探测」处理，无需手动修改。\n\n---",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.1.0/FastSTRM.zip",
         "timestamp": "2026-10-31T00:00:00Z"
