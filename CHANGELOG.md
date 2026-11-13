@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.6.5] - 2026-11-13
+
+### 变更
+
+- 「加速成功」日志精简为只输出一句 `FastSTRM: 加速成功`，不再附带片名、取源耗时等附加信息；同一条目 5 秒内仍只记一次。
+
+---
+
 ## [3.6.4] - 2026-11-13
 
 ### 变更

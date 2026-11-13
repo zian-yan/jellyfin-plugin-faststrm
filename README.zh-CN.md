@@ -7,7 +7,7 @@
 <p align="center">让 Jellyfin 的 <code>.strm</code> 媒体跳过远程 <code>ffprobe</code>，点击即播。</p>
 
 <p align="center">
-  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.6.4-blue" alt="Release"></a>
+  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.6.5-blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/Jellyfin-12.0%2B-purple" alt="Jellyfin 12.0+">
   <img src="https://img.shields.io/badge/.NET-10.0-blueviolet" alt=".NET 10.0">
   <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/github/downloads/zian-yan/jellyfin-plugin-faststrm/total?label=Downloads&color=success" alt="Downloads"></a>
@@ -82,10 +82,10 @@ PlaybackInfo 请求
 
 「就绪」= `RunTimeTicks > 0` **且** 远端大小已补全。这类条目在拦截器里走单独的快速路径：不解析播放策略、不判定补探测条件、不校验大小，只做一次取源调用就返回，因此这条路径上不可能发生 ffprobe，也不可能对流地址多发一次请求。
 
-命中这条路径时，服务端日志会输出一行 **Info** 级别的加速记录（无需开 Debug 就能看到），带取源耗时：
+命中这条路径时，服务端日志只输出一行 **Info** 级记录（无需开 Debug 就能看到）：
 
 ```
-[INF] FastSTRM: 加速成功 — 某部影片 有流且远端大小已就绪，跳过探测直接播放（取源耗时 12 ms）
+[INF] FastSTRM: 加速成功
 ```
 
 ---
