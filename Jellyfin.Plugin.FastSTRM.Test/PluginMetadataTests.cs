@@ -9,10 +9,6 @@ using Xunit;
 
 namespace FastSTRM.Test;
 
-/// <summary>
-/// 元数据一致性守卫：插件 GUID 与版本号分散在代码、csproj、meta.json、build.yaml 四处，
-/// 任何一处漂移都会导致 Jellyfin 识别失败或更新链断裂，这里把三者钉在同一处。
-/// </summary>
 public class PluginMetadataTests
 {
     [Fact]
@@ -55,12 +51,6 @@ public class PluginMetadataTests
         Assert.Matches(@"^\d+\.\d+\.\d+\.\d+$", targetAbi!);
     }
 
-    /// <summary>
-    /// manifest.json 是插件目录的更新入口，但它由发布流水线在打包**之后**写入最新版本
-    /// （需要 zip 的 md5），所以「manifest 最新版本 == csproj 版本」只能在发布后校验，
-    /// 放进这里会让打 tag 时的构建必失败。这里只守住与版本无关、却能真正挡住事故的两条：
-    /// guid 一致，以及条目结构（版本递减、checksum 是 md5 形态）。
-    /// </summary>
     [Fact]
     public void Manifest_MatchesGuidAndKeepsVersionsOrdered()
     {
@@ -117,7 +107,6 @@ public class PluginMetadataTests
             : throw new InvalidOperationException("version not found in build.yaml");
     }
 
-    /// <summary>去掉可选的第四段（3.4.2.0 → 3.4.2），便于跨文件比较。</summary>
     private static string Normalize(string version)
     {
         var match = Regex.Match(version.Trim(), @"^(\d+\.\d+\.\d+)\.\d+$");
@@ -125,7 +114,6 @@ public class PluginMetadataTests
         return match.Success ? match.Groups[1].Value : version.Trim();
     }
 
-    /// <summary>从源码位置向上找到解决方案文件所在目录，避免依赖测试运行目录。</summary>
     private static string RepoRoot([CallerFilePath] string sourceFile = "")
     {
         var dir = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!);

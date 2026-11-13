@@ -8,40 +8,24 @@ using MediaBrowser.Model.Serialization;
 
 namespace FastSTRM;
 
-/// <summary>
-/// FastSTRM plugin entry point.
-/// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
-    /// <summary>
-    /// Fixed plugin GUID.
-    /// </summary>
     public const string PluginGuid = "a1b2c3d4-5678-9abc-def0-123456789abc";
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Plugin"/> class.
-    /// </summary>
     public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
     }
 
-    /// <summary>
-    /// Gets the current plugin instance.
-    /// </summary>
     public static Plugin? Instance { get; private set; }
 
-    /// <inheritdoc />
     public override string Name => "FastSTRM";
 
-    /// <inheritdoc />
     public override Guid Id => Guid.Parse(PluginGuid);
 
-    /// <inheritdoc />
     public override string Description => "消除 .strm 文件播放时的 ffprobe 延迟，实现秒开起播";
 
-    /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
         var ns = GetType().Namespace!;
@@ -50,8 +34,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = "FastStrmConfigurationPage",
-                // 显示名称与菜单图标决定控制台入口的呈现：开启 EnableInMainMenu 后，
-                // Jellyfin 会把该页面挂到控制台/主菜单，用户无需再手动拼接配置页 URL。
                 DisplayName = "FastSTRM",
                 EnableInMainMenu = true,
                 MenuIcon = "settings",

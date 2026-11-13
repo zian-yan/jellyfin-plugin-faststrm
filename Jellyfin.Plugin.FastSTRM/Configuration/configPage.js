@@ -3,9 +3,6 @@ export default function (view) {
 
     var pluginId = 'a1b2c3d4-5678-9abc-def0-123456789abc';
 
-    // ── i18n ──
-    // 语言跟随 Jellyfin 界面语言：识别到 zh 即中文（Hant / TW / HK / MO 走繁体），其余一律英文。
-    // HTML 上的文案以简中写在标签内做兜底，脚本失效时页面依然可读；此处只做覆盖。
     var STRINGS = {
         'summary.total': {
             zh: '.strm 媒体数量',
@@ -223,8 +220,6 @@ export default function (view) {
     var LANG_HANT = 'zhHant';
     var LANG_EN = 'en';
 
-    // 界面语言来自 Jellyfin Web：优先 <html lang>（appHost.setCulture 会写入），
-    // 其次 Globalize 当前区域，两者都拿不到才退回浏览器语言。任一信号为中文即判定中文。
     function detectLanguage() {
         var signals = [];
 
@@ -241,7 +236,6 @@ export default function (view) {
                 }
             }
         } catch (e) {
-            // Globalize 可能不存在或未初始化，忽略该信号。
         }
 
         if (!signals.length) {
@@ -250,7 +244,6 @@ export default function (view) {
                     signals.push(navigator.language);
                 }
             } catch (e2) {
-                // 极少数环境禁用 navigator，保持空信号 → 回落英文。
             }
         }
 
@@ -280,7 +273,6 @@ export default function (view) {
         var entry = STRINGS[key];
         var text = entry ? (entry[currentLanguage] || entry.zh) : null;
         if (text === null || text === undefined) {
-            // 缺词条时退回 key 本身，便于发现漏翻。
             text = key;
         }
 
@@ -290,7 +282,6 @@ export default function (view) {
         return text;
     }
 
-    // 覆盖所有带 data-i18n 标记的节点；未覆盖的属性（placeholder/title）由各渲染函数用 t() 设置。
     function applyTranslations() {
         var nodes = view.querySelectorAll('[data-i18n]');
         for (var i = 0; i < nodes.length; i++) {
@@ -305,7 +296,6 @@ export default function (view) {
 
     applyTranslations();
 
-    // ── DOM references ──
     var lblTotal = view.querySelector('#lblSummaryTotal');
     var lblProbed = view.querySelector('#lblSummaryProbed');
     var lblUnprobed = view.querySelector('#lblSummaryUnprobed');
@@ -339,21 +329,16 @@ export default function (view) {
     var pollTimer = null;
     var visible = false;
 
-    // ── 按用户播放策略的编辑态 ──
-    // userPolicies 是唯一可信来源：界面改动先写这里，保存时整体覆盖 config.UserPolicies。
     var userPolicies = [];
     var users = [];
     var globalDelaySeconds = 5;
 
     var policyModeOrder = ['Inherit', 'InstantNoProbe', 'InstantBackgroundProbe', 'OfficialProbe'];
 
-    // key 集合固定，值随语言变化；同时用作「模式是否合法」的判定表。
     var policyModeLabels = {};
     policyModeOrder.forEach(function (mode) {
         policyModeLabels[mode] = t('policyMode.' + mode);
     });
-
-    // ── Helpers ──
 
     function apiGet(path) {
         return ApiClient.ajax({ url: ApiClient.getUrl(path), type: 'GET', dataType: 'json' });
@@ -391,7 +376,6 @@ export default function (view) {
         return String(userId).toLowerCase();
     }
 
-    // 下拉框、延迟与停止策略只在“跳过探测”开启时可用；后两者只在“后台补探测”模式下可用。
     function updateUnprobedPlaybackState() {
         var instantPlayback = chkSkipProbeForUnprobed.checked;
         var backgroundProbe = instantPlayback && selectUnprobedPlaybackMode.value === 'Background';
@@ -403,8 +387,6 @@ export default function (view) {
         cancelProbeOnStopContainer.style.opacity = backgroundProbe ? '1' : '0.5';
     }
 
-    // ── 按用户播放策略：渲染 ──
-
     function findUserName(userId) {
         var key = policyKey(userId);
         for (var i = 0; i < users.length; i++) {
@@ -413,7 +395,6 @@ export default function (view) {
             }
         }
 
-        // 用户列表还没加载完时只显示 Id 前缀，加载完会重新渲染出名字。
         return users.length
             ? t('userPolicy.deletedUser', String(userId).substring(0, 8))
             : String(userId).substring(0, 8);
@@ -438,7 +419,6 @@ export default function (view) {
         modeSelect.title = policyModeLabels[policy.Mode] || '';
 
         if (!background) {
-            // 非「后台补探测」模式不保留延迟值，避免配置里出现永远不生效的数字。
             delayInput.value = '';
         }
     }
@@ -449,7 +429,7 @@ export default function (view) {
             + ' gap: 0.6em; align-items: center;';
 
         var nameCell = document.createElement('div');
-        nameCell.textContent = findUserName(policy.UserId);   // textContent：用户名可能含 <>，绝不拼 HTML
+        nameCell.textContent = findUserName(policy.UserId);
         nameCell.title = String(policy.UserId);
         nameCell.style.cssText = 'font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
 
@@ -565,7 +545,6 @@ export default function (view) {
     function collectUserPolicies() {
         var result = [];
         userPolicies.forEach(function (policy) {
-            // 「继承全局」等于未单独配置：不写入配置文件，语义与实现保持一致。
             if (!policy.Mode || policy.Mode === 'Inherit') {
                 return;
             }
@@ -604,7 +583,6 @@ export default function (view) {
 
             result.push({
                 UserId: item.UserId,
-                // 界面无法表达非法模式：归一为「继承全局」，保存时顺带修掉手改文件留下的坏值。
                 Mode: policyModeLabels[item.Mode] ? item.Mode : 'Inherit',
                 BackgroundProbeDelaySeconds: item.BackgroundProbeDelaySeconds === null
                     || item.BackgroundProbeDelaySeconds === undefined
@@ -622,33 +600,26 @@ export default function (view) {
             });
             renderUserPolicies();
         }).catch(function () {
-            // 用户列表拿不到时不能阻断全局配置的保存：既有策略仍在 userPolicies 里，原样回写。
             lblUserPolicySummary.textContent = t('userPolicy.usersLoadFailed');
             btnAddUserPolicy.disabled = true;
             selectAddUser.disabled = true;
         });
     }
 
-    // ── Data loading ──
-
     function loadSummary(forceRefresh) {
         return apiGet('FastStrm/Summary' + (forceRefresh ? '?refresh=true' : '')).then(function (data) {
             lblTotal.textContent = data.Total;
             lblProbed.textContent = data.Probed;
             lblUnprobed.textContent = data.Unprobed;
-            // 旧版服务端不返回该字段：显示 "-" 而不是 "undefined"。
             lblSizeMissing.textContent = data.SizeMissing === undefined || data.SizeMissing === null
                 ? '-'
                 : data.SizeMissing;
         }).catch(function () {
-            // The summary is a whole-library scan on the server; a transient failure only means
-            // the counters stay as they are, so do not surface it as an unhandled rejection.
         });
     }
 
     function loadStatus() {
         return apiGet('FastStrm/Probe/Status').then(function (data) {
-            // 服务端未来新增的状态值不会命中词条，原样显示比显示 key 更有用。
             var stateText = STRINGS['status.state.' + data.State] ? t('status.state.' + data.State) : data.State;
             lblTaskState.textContent = stateText;
             lblCurrentItem.textContent = data.CurrentItem || '-';
@@ -664,7 +635,6 @@ export default function (view) {
                 btnStart.style.display = 'inline-flex';
                 btnStop.style.display = 'none';
                 stopPolling();
-                // A run just ended, so the cached counters on the server are stale.
                 loadSummary(true);
             }
         });
@@ -673,35 +643,25 @@ export default function (view) {
     function loadConfig() {
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             chkAutoProbe.checked = config.EnableAutoProbe;
-            // 默认值为 true：旧配置文件中没有该字段时也保持"跳过探测"的极速模式
             txtProbeConcurrency.value = clampConcurrency(config.MaxConcurrentProbes);
             txtRemoteSizeTimeout.value = clampRemoteSizeTimeout(config.RemoteSizeTimeoutSeconds);
-            // 默认允许内网目标：旧配置文件没有该字段时保持既有行为（局域网媒体服务器）
             if (chkAllowPrivateNetworkTargets) {
                 chkAllowPrivateNetworkTargets.checked = config.AllowPrivateNetworkTargets !== false;
             }
             chkSkipProbeForUnprobed.checked = config.SkipProbeForUnprobedStrm !== false;
-            // 默认不补探测：旧配置文件中没有该字段时按“直接起播，不补探测”处理
             selectUnprobedPlaybackMode.value = config.EnableBackgroundProbeForUnprobedStrm === true
                 ? 'Background'
                 : 'None';
             txtBackgroundProbeDelay.value = clampDelaySeconds(config.BackgroundProbeDelaySeconds);
-            // 默认开启：旧配置文件中没有该字段时，播放停止即取消补探测
             chkCancelProbeOnPlaybackStop.checked = config.CancelBackgroundProbeOnPlaybackStop !== false;
             updateUnprobedPlaybackState();
 
-            // 旧配置文件没有 UserPolicies 字段，按“无用户级配置”处理
             globalDelaySeconds = clampDelaySeconds(config.BackgroundProbeDelaySeconds);
             userPolicies = normalizePolicies(config.UserPolicies);
             renderUserPolicies();
         });
     }
 
-    // ── Polling ──
-
-    // A self-rescheduling timeout instead of setInterval: it never stacks requests when the
-    // server is slow, and `visible` prevents an in-flight response from restarting polling
-    // after the page was hidden.
     function scheduleNextPoll() {
         if (!visible || pollTimer) {
             return;
@@ -716,8 +676,6 @@ export default function (view) {
         }
 
         loadStatus().catch(function () {
-            // Keep polling after a transient request failure; a successful response decides
-            // whether another round is needed.
             scheduleNextPoll();
         });
     }
@@ -729,14 +687,10 @@ export default function (view) {
         }
     }
 
-    // ── Event handlers ──
-
     btnStart.addEventListener('click', function () {
         apiPost('FastStrm/Probe/Start?mode=' + encodeURIComponent(selectMode.value)).then(function () {
             loadStatus();
         }).catch(function () {
-            // A rejected start (409 while another run is winding down) leaves the buttons as-is;
-            // the next status poll corrects them.
         });
     });
 
@@ -744,7 +698,6 @@ export default function (view) {
         apiPost('FastStrm/Probe/Stop').then(function () {
             loadStatus();
         }).catch(function () {
-            // Ignore: the status poll still reflects the real server state.
         });
     });
 
@@ -802,8 +755,6 @@ export default function (view) {
             ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
                 Dashboard.processPluginConfigurationUpdateResult();
 
-                // 保存后按实际落盘内容回填：被归一为「继承全局」的条目会从列表消失，
-                // 与配置文件保持一致，避免界面显示一份、文件里是另一份。
                 globalDelaySeconds = config.BackgroundProbeDelaySeconds;
                 userPolicies = normalizePolicies(config.UserPolicies);
                 renderUserPolicies();
@@ -815,18 +766,13 @@ export default function (view) {
     chkSkipProbeForUnprobed.addEventListener('change', updateUnprobedPlaybackState);
     selectUnprobedPlaybackMode.addEventListener('change', updateUnprobedPlaybackState);
 
-    // ── Page lifecycle ──
-
     view.addEventListener('viewshow', function () {
         visible = true;
-        // 页面可能被缓存复用：语言若在外部被改过，重新套用文字（幂等）。
         applyTranslations();
         loadSummary();
         loadStatus().catch(function () {
-            // Transient failure while opening the page; the next status poll/visit retries.
         });
         loadConfig().then(loadUsers).catch(function () {
-            // 配置或用户列表读取失败时页面保持可用状态，保存仍会带上已有策略。
         });
         updateUnprobedPlaybackState();
         updateAddRowState();

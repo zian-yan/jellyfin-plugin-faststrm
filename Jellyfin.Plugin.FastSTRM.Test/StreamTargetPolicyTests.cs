@@ -4,19 +4,11 @@ using Xunit;
 
 namespace FastSTRM.Test;
 
-/// <summary>
-/// 流地址目标策略：.strm 是不可信输入，服务端只应请求「合法媒体源可能存在的地址」。
-/// </summary>
-/// <remarks>
-/// 用表驱动的单 Fact 而不是 Theory：判定矩阵是一条完整的规格，成组断言比一条条用例更容易
-/// 看出「哪一档被漏掉了」。
-/// </remarks>
 public class StreamTargetPolicyTests
 {
     [Fact]
     public void AlwaysBlockedRangesAreRefusedWhateverTheConfiguration()
     {
-        // 链路本地（含 169.254.169.254 元数据端点）、未指定、组播、广播：没有合法媒体源住在这里。
         string[] blocked =
         {
             "169.254.169.254",
@@ -39,7 +31,6 @@ public class StreamTargetPolicyTests
     [Fact]
     public void PrivateRangesFollowConfiguration()
     {
-        // 环回 / RFC1918 / CGNAT / ULA：默认放行（局域网媒体服务器是主场景），可配置关闭。
         string[] privateAddresses =
         {
             "127.0.0.1",
@@ -86,8 +77,6 @@ public class StreamTargetPolicyTests
     [Fact]
     public void IPv6TunnelledIPv4AddressesCannotBypassTheCheck()
     {
-        // 6to4（2002::/16）与 NAT64（64:ff9b::/96）把 IPv4 嵌在 IPv6 里。只看 IPv6 位模式的话，
-        // NAT64 网络里的 64:ff9b::a00:5 就是 10.0.0.5，元数据端点同样可以这样藏进来。
         Assert.False(
             StreamTargetPolicy.IsAllowed(IPAddress.Parse("64:ff9b::a00:5"), allowPrivateTargets: false),
             "NAT64 内嵌 10.0.0.5");
@@ -104,7 +93,6 @@ public class StreamTargetPolicyTests
             StreamTargetPolicy.IsAllowed(IPAddress.Parse("2002:a9fe:a9fe::"), allowPrivateTargets: true),
             "6to4 内嵌 169.254.169.254");
 
-        // 内嵌公网地址仍按公网处理，不因为前缀特殊就误杀。
         Assert.True(
             StreamTargetPolicy.IsAllowed(IPAddress.Parse("64:ff9b::808:808"), allowPrivateTargets: false),
             "NAT64 内嵌 8.8.8.8");
@@ -121,7 +109,6 @@ public class StreamTargetPolicyTests
     [Fact]
     public void HostNameNeedsAResolvedAddress()
     {
-        // 主机名必须在建连时解析后判定（ConnectCallback），同步路径返回 null 表示「待判定」。
         Assert.Null(StreamTargetPolicy.EvaluateLiteralHost("media.example.com", true));
         Assert.False(StreamTargetPolicy.EvaluateLiteralHost(string.Empty, true));
     }
