@@ -21,7 +21,19 @@
 
 ## 安装
 
-**方式一：下载 Release**
+**方式一：添加插件仓库（推荐，可自动更新）**
+
+1. 打开 **控制台 → 插件 → 仓库**，点右上角的 `+` 新增。
+2. 名称填 `FastSTRM`，URL 填下面这一行（订阅的是仓库根目录的 `manifest.json`，始终指向最新版本）：
+
+    ```
+    https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/manifest.json
+    ```
+
+3. 保存后进入 **插件 → 所有**，找到 **FastSTRM** 并安装。
+4. 之后每次发版，**插件** 页都会出现待更新提示，点更新即可，不需要手动替换 DLL。
+
+**方式二：下载 Release**
 
 1. 下载 [最新版本](https://github.com/zian-yan/jellyfin-plugin-faststrm/releases) 的 `FastSTRM.dll`。
 2. 放入 Jellyfin 插件目录下的 `FastSTRM` 文件夹：
@@ -35,7 +47,7 @@
 
 3. 重启 Jellyfin，在 **控制台 → 插件** 中确认 FastSTRM 已启用。
 
-**方式二：源码编译**（需 [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)）
+**方式三：源码编译**（需 [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)）
 
 ```bash
 git clone https://github.com/zian-yan/jellyfin-plugin-faststrm.git
@@ -87,6 +99,13 @@ PlaybackInfo 请求
 ```
 [INF] FastSTRM: 加速成功
 ```
+
+---
+
+## 已知取舍
+
+- **没有时长的 `.strm` 不会自动标记「已观看」。** Jellyfin 把「没有时长」当成「已看完」：直接置 `Played = true` 并把播放位置清零。所以在时长未知期间，插件改为保存上报的播放位置、跳过完成态更新，续播也就不会在每次进度上报时被清掉。
+  播放与续播不受影响；一旦补探测拿到时长，Jellyfin 原生的完成判定就自动接管。对于始终没有时长、又没有开启后台补探测的条目，`已观看 / 播放次数 / 最近播放时间` 会保持不动，直到跑一次预探测——依赖这几个字段的话，请跑一次增量探测或打开后台补探测。
 
 ---
 

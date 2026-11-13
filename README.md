@@ -21,7 +21,19 @@
 
 ## Installation
 
-**Option 1: download a release**
+**Option 1: add the plugin repository (recommended, auto-updates)**
+
+1. Open **Dashboard → Plugins → Repositories** and click `+`.
+2. Name it `FastSTRM` and use this URL (the repository-root `manifest.json`, which always points at the latest release):
+
+    ```
+    https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/manifest.json
+    ```
+
+3. Save, then open **Plugins → Catalog** and install **FastSTRM**.
+4. From then on, every release shows up under **Plugins** as a pending update — click update instead of replacing the DLL by hand.
+
+**Option 2: download a release**
 
 1. Download `FastSTRM.dll` from the [latest release](https://github.com/zian-yan/jellyfin-plugin-faststrm/releases).
 2. Place it in a `FastSTRM` folder inside the Jellyfin plugin directory:
@@ -35,7 +47,7 @@
 
 3. Restart Jellyfin and confirm FastSTRM is enabled under **Dashboard → Plugins**.
 
-**Option 2: build from source** (requires the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0))
+**Option 3: build from source** (requires the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0))
 
 ```bash
 git clone https://github.com/zian-yan/jellyfin-plugin-faststrm.git
@@ -87,6 +99,13 @@ Every hit writes exactly one **Information** line to the server log, visible wit
 ```
 [INF] FastSTRM: 加速成功
 ```
+
+---
+
+## Known trade-off
+
+- **A `.strm` item with no runtime is not marked as watched.** Jellyfin treats "no runtime" as "finished": it sets `Played = true` and resets the position. While the duration is unknown, the plugin therefore stores the reported position and skips the completion update, so resume keeps working instead of being wiped on every progress report.
+  Progress and resume are unaffected. Once a probe has stored the runtime, Jellyfin's normal completion tracking takes over again. For an item that never gets a runtime and has background probing disabled, `Played` / play count / last-played stay unchanged until a probe runs — run an incremental probe or enable background probing if you rely on those fields.
 
 ---
 
