@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.4.0",
+        "changelog": "### 变更\n\n- 有流且远端大小已补全的 `.strm` 被拦截并直接起播时，输出一行 Info 级日志「加速成功」，带取源耗时；同一条目 5 秒内只记一次，避免一次起播刷出多条。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.4/FastSTRM.zip",
+        "checksum": "2bcf3afe3f124e38c42a7d71bf9cef67",
+        "timestamp": "2026-11-13T11:07:25Z"
+      },
+      {
         "version": "3.6.3.0",
         "changelog": "### 变更\n\n- 有流且远端大小已补全的 `.strm` 走独立的零探测快速路径：拦截后直接以 `allowMediaProbe = false` 取源、直连播放，不解析播放策略、不判定补探测条件，起播链路上不会发生 ffprobe，也不会对流地址多发一次请求。\n- 补充分流判定的回归测试：有流且有大小、有流缺大小、无流、大小仍是 `.strm` 文本长度、短片已写对大小。\n\n### 文档\n\n- README 精简为安装、简介、播放决策流程三节，安装移到最前。\n- 移除仓库内的 Wiki 与 Wiki 发布脚本，文档站点同步下线。\n\n---",
         "targetAbi": "12.0.0.0",
