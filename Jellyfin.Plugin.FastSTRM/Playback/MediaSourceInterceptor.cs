@@ -73,6 +73,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
     /// <summary>
     /// Core interception point — routing for .strm playback:
+    /// 0. .strm that is already "ready" (stream info <b>and</b> a resolved remote size) → the
+    ///    zero-probe fast path below: no policy resolution, no background probe, no size stat
+    ///    beyond the readiness check, one inner call with allowMediaProbe = false.
     /// 1. Non-.strm → passthrough (allowMediaProbe unchanged, zero side effects).
     /// 2. .strm with stream info (RunTimeTicks &gt; 0) → allowMediaProbe = false (skip ffprobe).
     /// 3. .strm without stream info → decided by the playing user's effective playback policy
@@ -100,7 +103,23 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 .ConfigureAwait(false);
         }
 
-        var hasStreamInfo = item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
+        // 就绪快速路径：有流且远端大小已补全的条目没有任何待补信息。
+        // 这条路径上不做策略解析、不查补探测条件、不碰警告去重表，只有一次取源调用，
+        // 客户端拿到媒体源后直连播放 —— 起播即秒开，且流地址不会被多请求一次。
+        // 不写「本次播放的策略」记录是有意的：PlaybackStateInterceptor 只在缺时长时才查策略，
+        // 而这条路径的前提就是时长已入库。
+        if (IsPlaybackReady(item))
+        {
+            _logger.LogDebug(
+                "FastSTRM: {Name} already has stream info and its remote size; skipping every probe for instant playback",
+                LogSafe.Name(item));
+
+            return await _inner.GetPlaybackMediaSources(
+                item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var hasStreamInfo = HasStreamInfo(item);
 
         // 有流条目无条件跳过探测；无流条目按播放者生效策略决定。
         // user 可能为 null（部分服务端内部调用不带用户上下文），此时解析结果为全局策略。
@@ -172,6 +191,24 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     private static bool IsStrmItem(BaseItem item)
         => item.Path is not null
            && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 「有流」判定：库中已有时长，即该条目探测过并写入了流信息。
+    /// </summary>
+    private static bool HasStreamInfo(BaseItem item)
+        => item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
+
+    /// <summary>
+    /// 「已就绪」判定：既有流信息，远端文件大小也已补全 —— 该条目在播放链路上没有任何待补内容。
+    /// </summary>
+    /// <remarks>
+    /// 「有大小」用 <see cref="RemoteSizeService.IsRemoteSizeMissing"/> 而不是直接比较阈值：
+    /// 它会被写入过真实大小的短片（4 KiB–1 MiB）正确判为已补全，只有大小仍等于 .strm
+    /// 文本文件长度时才算缺失。判定为就绪后播放不再触发任何探测，因此这里的口径必须与
+    /// 补全链路一致，否则会出现「补了又被判缺失 → 每次起播重新探测」的抖动。
+    /// </remarks>
+    internal static bool IsPlaybackReady(BaseItem item)
+        => HasStreamInfo(item) && !RemoteSizeService.IsRemoteSizeMissing(item);
 
     /// <summary>
     /// Emits a single warning per item when an unprobed .strm is played without
