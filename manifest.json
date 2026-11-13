@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.7.0",
+        "changelog": "### 变更\n\n- 代码瘦身（纯内部重构，功能与行为不变）：C# 源码 6573 → 4830 行；插件本体 5122 → 3507 行（-31.5%）。\n- 新增 `Common/StrmItem.cs`，统一「是否 .strm」「是否已有流信息」判定，替换 4 个文件里各自重复的私有实现。\n- 新增 `Common/MarkerSet.cs`，统一「有界去重标记集」，替换播放策略解析与两个拦截器中各写一遍的「字典 + 计数器 + 满即清空」样板。\n- `ConcurrencyGate.AcquireAsync` 返回可 `using` 的 `Lease`，调用点不再手写名额获取与释放。\n- `LogSafe.Sanitize` 收敛控制字符中和与长度截断，原先在日志、URL、策略三处各写一份。\n- 播放策略派生改用 `with` 表达式；`Snapshot`、`SummarySnapshot`、`CachedSize` 改为 record。\n- 删除全部源码注释（含配置页 HTML/JS 与 CSS 注释），配置页脚本 840 → 786 行。\n\n### 验证\n\n- 构建 0 警告 0 错误；105 个单元测试全部通过，与重构前基线一致。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.7/FastSTRM.zip",
+        "checksum": "59a5d2863e95fc8128421949c98ea861",
+        "timestamp": "2026-11-13T16:17:35Z"
+      },
+      {
         "version": "3.6.6.0",
         "changelog": "### 修复\n\n- 配置 `HTTP_PROXY` / `HTTPS_PROXY` 时内网地址校验失效：建连回调只看到代理地址，改为请求前解析目标再判定。\n- `StreamTargetPolicy` 未识别 6to4 / NAT64 中内嵌的 IPv4 地址，NAT64 网络下 `64:ff9b::a00:5` 即 `10.0.0.5`。\n- 后台探测任务收尾时按 key 删除登记项，可能误删同条目新调度的任务与取消源，改为按值移除。\n- 并发上限门在配置变更时替换信号量，新旧实例同时放行，改为单计数器 + 释放广播。\n- `HEAD` / `Range` 响应只按长度判定，HTML 错误页会被写成媒体大小，改为按 `Content-Type` 拒绝。\n- 服务装饰包装的是第一个注册而非最后注册，与 DI 的解析规则不一致。\n\n### 变更\n\n- 汇总接口不再在请求线程上扫描全库：过期返回旧值 + 后台单飞刷新；`.strm` 列表缓存 5 分钟，探测开始时强制重扫。\n- 入库自动探测不再在库扫描线程上读 `.strm` 文件长度，移入后台任务判定。\n- 远端大小请求的并发跟随「探测并发数」（2–8）。\n- 播放热路径上的 `ConcurrentDictionary.Count` 改为计数器维护；策略指纹重算间隔 1 秒改为 5 秒。\n\n### 文档\n\n- README 增加「已知取舍」与「添加插件仓库」两节，安装章节改为三种方式。\n\n---",
         "targetAbi": "12.0.0.0",
