@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.6.7] - 2026-11-14
+
+### 变更
+
+- 代码瘦身（纯内部重构，功能与行为不变）：C# 源码 6573 → 4830 行；插件本体 5122 → 3507 行（-31.5%）。
+- 新增 `Common/StrmItem.cs`，统一「是否 .strm」「是否已有流信息」判定，替换 4 个文件里各自重复的私有实现。
+- 新增 `Common/MarkerSet.cs`，统一「有界去重标记集」，替换播放策略解析与两个拦截器中各写一遍的「字典 + 计数器 + 满即清空」样板。
+- `ConcurrencyGate.AcquireAsync` 返回可 `using` 的 `Lease`，调用点不再手写名额获取与释放。
+- `LogSafe.Sanitize` 收敛控制字符中和与长度截断，原先在日志、URL、策略三处各写一份。
+- 播放策略派生改用 `with` 表达式；`Snapshot`、`SummarySnapshot`、`CachedSize` 改为 record。
+- 删除全部源码注释（含配置页 HTML/JS 与 CSS 注释），配置页脚本 840 → 786 行。
+
+### 验证
+
+- 构建 0 警告 0 错误；105 个单元测试全部通过，与重构前基线一致。
+
+---
+
 ## [3.6.6] - 2026-11-13
 
 ### 修复
