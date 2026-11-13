@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.5.0",
+        "changelog": "### 变更\n\n- 「加速成功」日志精简为只输出一句 `FastSTRM: 加速成功`，不再附带片名、取源耗时等附加信息；同一条目 5 秒内仍只记一次。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.5/FastSTRM.zip",
+        "checksum": "846541439fa7ccdb2f9d41a23259261d",
+        "timestamp": "2026-11-13T11:15:18Z"
+      },
+      {
         "version": "3.6.4.0",
         "changelog": "### 变更\n\n- 有流且远端大小已补全的 `.strm` 被拦截并直接起播时，输出一行 Info 级日志「加速成功」，带取源耗时；同一条目 5 秒内只记一次，避免一次起播刷出多条。\n\n---",
         "targetAbi": "12.0.0.0",
