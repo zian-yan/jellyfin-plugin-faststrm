@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.6.0",
+        "changelog": "### 修复\n\n- 配置 `HTTP_PROXY` / `HTTPS_PROXY` 时内网地址校验失效：建连回调只看到代理地址，改为请求前解析目标再判定。\n- `StreamTargetPolicy` 未识别 6to4 / NAT64 中内嵌的 IPv4 地址，NAT64 网络下 `64:ff9b::a00:5` 即 `10.0.0.5`。\n- 后台探测任务收尾时按 key 删除登记项，可能误删同条目新调度的任务与取消源，改为按值移除。\n- 并发上限门在配置变更时替换信号量，新旧实例同时放行，改为单计数器 + 释放广播。\n- `HEAD` / `Range` 响应只按长度判定，HTML 错误页会被写成媒体大小，改为按 `Content-Type` 拒绝。\n- 服务装饰包装的是第一个注册而非最后注册，与 DI 的解析规则不一致。\n\n### 变更\n\n- 汇总接口不再在请求线程上扫描全库：过期返回旧值 + 后台单飞刷新；`.strm` 列表缓存 5 分钟，探测开始时强制重扫。\n- 入库自动探测不再在库扫描线程上读 `.strm` 文件长度，移入后台任务判定。\n- 远端大小请求的并发跟随「探测并发数」（2–8）。\n- 播放热路径上的 `ConcurrentDictionary.Count` 改为计数器维护；策略指纹重算间隔 1 秒改为 5 秒。\n\n### 文档\n\n- README 增加「已知取舍」与「添加插件仓库」两节，安装章节改为三种方式。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.6/FastSTRM.zip",
+        "checksum": "fc90e25c0373c70080948e9a706a030c",
+        "timestamp": "2026-11-13T11:36:24Z"
+      },
+      {
         "version": "3.6.5.0",
         "changelog": "### 变更\n\n- 「加速成功」日志精简为只输出一句 `FastSTRM: 加速成功`，不再附带片名、取源耗时等附加信息；同一条目 5 秒内仍只记一次。\n\n---",
         "targetAbi": "12.0.0.0",
