@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -129,13 +128,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         // 而这条路径的前提就是时长已入库。
         if (IsPlaybackReady(item))
         {
-            var stopwatch = Stopwatch.StartNew();
             var readySources = await _inner.GetPlaybackMediaSources(
                 item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
                 .ConfigureAwait(false);
 
             // 只在取源成功返回后记录：抛异常说明这次没能加速，不能报成功。
-            LogAccelerationSucceeded(item, stopwatch.ElapsedMilliseconds);
+            LogAccelerationSucceeded(item);
             return readySources;
         }
 
@@ -200,21 +198,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     /// 输出一行「加速成功」，说明该条目被拦截后直接进入了播放，没有任何探测。
     /// </summary>
     /// <remarks>
-    /// Info 级别是有意的：默认日志级别下可见，管理员不用开 Debug 就能确认加速确实生效。
-    /// 同一条目在 <see cref="AccelerationLogInterval"/> 内只记一次，避免一次起播的多次
-    /// PlaybackInfo 刷出多条成功日志。
+    /// 只输出这一句，不带片名、耗时等附加信息：默认日志级别下就可见，管理员扫一眼即可确认
+    /// 加速生效，不需要按行解析。同一条目在 <see cref="AccelerationLogInterval"/> 内只记一次，
+    /// 避免一次起播的多次 PlaybackInfo 刷出多条。
     /// </remarks>
-    private void LogAccelerationSucceeded(BaseItem item, long elapsedMilliseconds)
+    private void LogAccelerationSucceeded(BaseItem item)
     {
         if (!ShouldLogAcceleration(item.Id))
         {
             return;
         }
 
-        _logger.LogInformation(
-            "FastSTRM: 加速成功 — {Name} 有流且远端大小已就绪，跳过探测直接播放（取源耗时 {ElapsedMilliseconds} ms）",
-            LogSafe.Name(item),
-            elapsedMilliseconds);
+        _logger.LogInformation("FastSTRM: 加速成功");
     }
 
     private bool ShouldLogAcceleration(Guid itemId)
