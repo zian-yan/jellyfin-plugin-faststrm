@@ -70,7 +70,13 @@ public sealed class RemoteSizeService : IDisposable
     /// Concurrent requests against stream endpoints. The resolutions are cheap header requests,
     /// but they hit the same upstreams as playback, so the fan-out stays small.
     /// </summary>
-    private const int MaxConcurrentResolutions = 2;
+    /// <remarks>
+    /// 下限保持 2，使「探测并发数 = 1」时大小补全仍能有一点流水线；上限 8 防止一次全量探测
+    /// 把上游打满。实际取值跟随 <c>MaxConcurrentProbes</c>，配置保存后立即生效。
+    /// </remarks>
+    private const int MinConcurrentResolutions = 2;
+
+    private const int MaxConcurrentResolutions = 8;
 
     /// <summary>
     /// How long a resolved size is trusted. Sizes rarely change, but a replaced file must not be
@@ -95,7 +101,11 @@ public sealed class RemoteSizeService : IDisposable
 
     private readonly ILibraryManager _libraryManager;
     private readonly ILogger<RemoteSizeService> _logger;
-    private readonly SemaphoreSlim _gate = new(MaxConcurrentResolutions, MaxConcurrentResolutions);
+
+    /// <summary>
+    /// 限制同时在途的大小请求数。上限跟随配置，且每次占位时重新读取，因此不需要重建对象。
+    /// </summary>
+    private readonly ConcurrencyGate _gate = new(ReadResolutionLimit);
 
     /// <summary>Item Id → resolved size. Read by the media-source decorator on the hot path.</summary>
     private readonly ConcurrentDictionary<Guid, CachedSize> _itemSizes = new();
@@ -141,6 +151,17 @@ public sealed class RemoteSizeService : IDisposable
     private static bool ReadAllowPrivateNetworkTargets()
         => Plugin.Instance?.Configuration.AllowPrivateNetworkTargets
            ?? PluginConfiguration.DefaultAllowPrivateNetworkTargets;
+
+    /// <summary>
+    /// 大小请求的并发上限：跟随「探测并发数」配置，夹在 2–8 之间。
+    /// </summary>
+    private static int ReadResolutionLimit()
+    {
+        var configured = Plugin.Instance?.Configuration.GetMaxConcurrentProbes()
+                         ?? PluginConfiguration.MinConcurrentProbes;
+
+        return Math.Clamp(configured, MinConcurrentResolutions, MaxConcurrentResolutions);
+    }
 
     /// <summary>
     /// Returns true when the stored size cannot be the size of the real media file, i.e. the item
@@ -347,7 +368,7 @@ public sealed class RemoteSizeService : IDisposable
 
         long? size;
         string diagnostic;
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _gate.AcquireAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             (size, diagnostic) = await QueryRemoteSizeWithDiagnosticsAsync(url, cancellationToken).ConfigureAwait(false);
@@ -413,15 +434,32 @@ public sealed class RemoteSizeService : IDisposable
             return (null, "the url is not an absolute uri");
         }
 
+        var allowPrivate = AllowPrivateNetworkTargets;
+
         // Fast, clear rejection for literal addresses (127.0.0.1, 169.254.169.254, 10.0.0.5, …).
         // Host names are resolved later, in the connect callback, which also covers redirects.
-        if (StreamTargetPolicy.EvaluateLiteralHost(uri.DnsSafeHost, AllowPrivateNetworkTargets) == false)
+        var literal = StreamTargetPolicy.EvaluateLiteralHost(uri.DnsSafeHost, allowPrivate);
+        if (literal == false)
         {
             _logger.LogWarning(
                 "FastSTRM: Refusing to query {Url}; its address is not an allowed stream target. "
                 + "Enable 'Allow requests to private network addresses' if this is a LAN media server.",
                 UrlForLog(url));
             return (null, "the target address is not allowed by the allowed-target setting");
+        }
+
+        // 走代理时 connect callback 看到的是代理地址，不是目标地址，主机名这一层的判定会整段失效
+        // （含云厂商元数据端点 169.254.169.254 这类「永远拒绝」的地址）。因此只在请求会经过代理时
+        // 先自行解析一次并判定；直连场景仍由 connect callback 兜底，不多付一次 DNS。
+        if (literal is null
+            && IsProxied(uri)
+            && !await AreResolvedTargetsAllowedAsync(uri.DnsSafeHost, allowPrivate, cancellationToken).ConfigureAwait(false))
+        {
+            _logger.LogWarning(
+                "FastSTRM: Refusing to query {Url} through the configured proxy; its resolved address is not an allowed stream target "
+                + "(the connect callback only sees the proxy address, so a private or link-local target would not be detected there)",
+                UrlForLog(url));
+            return (null, "the resolved address is not allowed by the allowed-target setting");
         }
 
         var fromHead = await TryHeadAsync(uri, url, notes, cancellationToken).ConfigureAwait(false);
@@ -434,6 +472,52 @@ public sealed class RemoteSizeService : IDisposable
         return fromGet is not null
             ? (fromGet, "ok (ranged GET)")
             : (null, notes.Summarize());
+    }
+
+    /// <summary>
+    /// 判断该请求是否会被 <see cref="HttpClient"/> 交给代理转发。
+    /// </summary>
+    /// <remarks>
+    /// 无代理时 <see cref="HttpClient.DefaultProxy"/> 返回的就是目标地址本身；返回别的地址
+    /// （或解析失败）才说明这一跳不由本进程直连。判定失败时按「不走代理」处理，此时
+    /// connect callback 的校验仍然有效，不会因此放宽安全检查。
+    /// </remarks>
+    private static bool IsProxied(Uri uri)
+    {
+        try
+        {
+            var proxy = HttpClient.DefaultProxy?.GetProxy(uri);
+            return proxy is not null && !proxy.Equals(uri);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 解析主机名并判定结果是否全部落在允许范围内。
+    /// </summary>
+    /// <remarks>
+    /// 与 <c>ConnectCallback</c> 保持同一语义：只要存在一个允许的地址就放行，由建连阶段挑用
+    /// 允许的那个。解析失败时放行——那种情况下这次请求本来也连不上目标，而把一次 DNS 抖动
+    /// 判成「目标非法」会让条目的远端大小永久补不上。
+    /// </remarks>
+    private static async Task<bool> AreResolvedTargetsAllowedAsync(
+        string host,
+        bool allowPrivateTargets,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+            return addresses.Length == 0
+                   || addresses.Any(address => StreamTargetPolicy.IsAllowed(address, allowPrivateTargets));
+        }
+        catch (Exception)
+        {
+            return true;
+        }
     }
 
     /// <summary>
@@ -458,6 +542,14 @@ public sealed class RemoteSizeService : IDisposable
 
             if (response.IsSuccessStatusCode)
             {
+                // 一个 >= 4 KiB 的 HTML 错误页同样带 Content-Length，写进 Size 就是错的数据。
+                // 流地址永远不该返回 text/html，直接判为无效。
+                if (IsHtmlResponse(response))
+                {
+                    notes.Add($"HEAD returned {DescribeStatus(response)} as {DescribeContentType(response)}, which is not a media file");
+                    return null;
+                }
+
                 var contentLength = response.Content.Headers.ContentLength;
                 if (IsAcceptableRemoteSize(contentLength))
                 {
@@ -518,6 +610,12 @@ public sealed class RemoteSizeService : IDisposable
             // 206 answers carry the total length in Content-Range; a 200 answer means the server
             // ignored the range, so only its Content-Length is usable (and the body is discarded
             // right away without being read).
+            if (IsHtmlResponse(response))
+            {
+                notes.Add($"{DescribeStatus(response)} answered as {DescribeContentType(response)}, which is not a media file");
+                return null;
+            }
+
             var totalLength = response.Content.Headers.ContentRange?.Length;
             if (IsAcceptableRemoteSize(totalLength))
             {
@@ -561,6 +659,16 @@ public sealed class RemoteSizeService : IDisposable
 
     private static string DescribeLength(long? length)
         => length is long value ? value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none";
+
+    /// <summary>
+    /// 判断响应是不是一个 HTML 页面（网关错误页、登录页、分享链接失效页都会这样返回）。
+    /// </summary>
+    private static bool IsHtmlResponse(HttpResponseMessage response)
+        => response.Content.Headers.ContentType?.MediaType is string mediaType
+           && mediaType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase);
+
+    private static string DescribeContentType(HttpResponseMessage response)
+        => Short(response.Content.Headers.ContentType?.MediaType ?? "an unknown content type", 40);
 
     /// <summary>
     /// Sanitizes a value that originated from the remote server (exception text, reason phrase):

@@ -77,6 +77,31 @@ public class RemoteSizeHttpTests
     }
 
     [Fact]
+    public async Task Query_RefusesAnHtmlErrorPageCarriedByA200()
+    {
+        // 网关/面板的登录页、分享链接失效页同样是 200 + 一个不小的 Content-Length。
+        // 只看长度会把「8 KiB 的 HTML」写成媒体大小，所以按 Content-Type 拒掉。
+        var handler = new StubHandler(_ => Html(HttpStatusCode.OK, 8192));
+        using var service = CreateService(handler);
+
+        var size = await service.QueryRemoteSizeAsync("http://93.184.216.34/movie.mkv", CancellationToken.None);
+
+        Assert.Null(size);
+    }
+
+    [Fact]
+    public async Task Query_RefusesAnHtmlErrorPageCarriedByA206()
+    {
+        // 206 + Content-Range 本来是完全可信的长度来源，但内容类型是 HTML 时同样必须拒绝。
+        var handler = new StubHandler(_ => Html(HttpStatusCode.PartialContent, 2, total: 8192));
+        using var service = CreateService(handler);
+
+        var size = await service.QueryRemoteSizeAsync("http://93.184.216.34/movie.mkv", CancellationToken.None);
+
+        Assert.Null(size);
+    }
+
+    [Fact]
     public async Task Query_FallsBackToRangedGetWhenHeadIsRejected()
     {
         var handler = new StubHandler(request => request.Method == HttpMethod.Head
@@ -488,6 +513,22 @@ public class RemoteSizeHttpTests
         var content = new ByteArrayContent(new byte[] { 0 });
         content.Headers.ContentRange = new ContentRangeHeaderValue(from, to, total);
         return new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = content };
+    }
+
+    /// <summary>
+    /// 一个「带可用长度、但内容其实是 HTML」的响应，用来覆盖「错误页被写成媒体大小」。
+    /// </summary>
+    /// <param name="total">给 206 用的 Content-Range 总长度；为 null 时不带该头。</param>
+    private static HttpResponseMessage Html(HttpStatusCode status, long contentLength, long? total = null)
+    {
+        var content = new StringContent("<html><body>error</body></html>", System.Text.Encoding.UTF8, "text/html");
+        content.Headers.ContentLength = contentLength;
+        if (total is long rangeTotal)
+        {
+            content.Headers.ContentRange = new ContentRangeHeaderValue(0, contentLength - 1, rangeTotal);
+        }
+
+        return new HttpResponseMessage(status) { Content = content };
     }
 
     private sealed class StubHandler : HttpMessageHandler

@@ -64,12 +64,17 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <summary>
     /// Replaces a service registration with a decorator that wraps the original implementation.
     /// </summary>
+    /// <remarks>
+    /// 必须取**最后一个**描述符：Microsoft DI 解析单个服务时以最后注册的实现为准。取第一个会
+    /// 出现「装饰器成为最后一个注册（因此被解析），但包的是早先那个不会被解析的实例」——一旦
+    /// Jellyfin 对同一个服务注册多次，装饰的行为就会与服务器实际使用的实现不一致。
+    /// </remarks>
     private static void DecorateService<TService>(
         IServiceCollection serviceCollection,
         Func<IServiceProvider, TService, bool, TService> decoratorFactory)
         where TService : class
     {
-        var descriptor = serviceCollection.FirstOrDefault(d => d.ServiceType == typeof(TService));
+        var descriptor = serviceCollection.LastOrDefault(d => d.ServiceType == typeof(TService));
         if (descriptor is null)
         {
             return;

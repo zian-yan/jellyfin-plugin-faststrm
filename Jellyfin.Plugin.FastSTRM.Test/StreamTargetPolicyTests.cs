@@ -84,6 +84,33 @@ public class StreamTargetPolicyTests
     }
 
     [Fact]
+    public void IPv6TunnelledIPv4AddressesCannotBypassTheCheck()
+    {
+        // 6to4（2002::/16）与 NAT64（64:ff9b::/96）把 IPv4 嵌在 IPv6 里。只看 IPv6 位模式的话，
+        // NAT64 网络里的 64:ff9b::a00:5 就是 10.0.0.5，元数据端点同样可以这样藏进来。
+        Assert.False(
+            StreamTargetPolicy.IsAllowed(IPAddress.Parse("64:ff9b::a00:5"), allowPrivateTargets: false),
+            "NAT64 内嵌 10.0.0.5");
+
+        Assert.False(
+            StreamTargetPolicy.IsAllowed(IPAddress.Parse("64:ff9b::a9fe:a9fe"), allowPrivateTargets: true),
+            "NAT64 内嵌 169.254.169.254（无论是否允许私网都必须拒绝）");
+
+        Assert.False(
+            StreamTargetPolicy.IsAllowed(IPAddress.Parse("2002:0a00:0005::"), allowPrivateTargets: false),
+            "6to4 内嵌 10.0.0.5");
+
+        Assert.False(
+            StreamTargetPolicy.IsAllowed(IPAddress.Parse("2002:a9fe:a9fe::"), allowPrivateTargets: true),
+            "6to4 内嵌 169.254.169.254");
+
+        // 内嵌公网地址仍按公网处理，不因为前缀特殊就误杀。
+        Assert.True(
+            StreamTargetPolicy.IsAllowed(IPAddress.Parse("64:ff9b::808:808"), allowPrivateTargets: false),
+            "NAT64 内嵌 8.8.8.8");
+    }
+
+    [Fact]
     public void LiteralHostIsEvaluatedSynchronously()
     {
         Assert.False(StreamTargetPolicy.EvaluateLiteralHost("169.254.169.254", true));

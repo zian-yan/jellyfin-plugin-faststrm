@@ -61,6 +61,16 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     private readonly ConcurrentDictionary<Guid, long> _lastAccelerationLoggedTicks = new();
 
     /// <summary>
+    /// Number of entries in <see cref="_lastAccelerationLoggedTicks"/>.
+    /// </summary>
+    /// <remarks>
+    /// <c>ConcurrentDictionary.Count</c> takes every bucket lock and walks all entries, and this
+    /// check runs on every PlaybackInfo — i.e. on the playback hot path. A counter incremented only
+    /// when an entry is actually added keeps the bound check free.
+    /// </remarks>
+    private int _accelerationLogCount;
+
+    /// <summary>
     /// Whether this decorator is the only owner of <see cref="_inner"/>. An instance that came
     /// from <c>ImplementationInstance</c> or an arbitrary factory may be shared, so disposing it
     /// from here could break the rest of the server.
@@ -72,6 +82,13 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     /// so repeated PlaybackInfo requests do not flood the log.
     /// </summary>
     private readonly ConcurrentDictionary<Guid, byte> _warnedItems = new();
+
+    /// <summary>
+    /// Number of entries in <see cref="_warnedItems"/>. Same rationale as
+    /// <see cref="_accelerationLogCount"/>: the bound check must not pay for
+    /// <c>ConcurrentDictionary.Count</c> on the request path.
+    /// </summary>
+    private int _warnedItemCount;
 
     public MediaSourceInterceptor(
         IMediaSourceManager inner,
@@ -219,34 +236,35 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return true;
         }
 
-        if (_lastAccelerationLoggedTicks.Count >= MaxTrackedAccelerations)
+        if (Volatile.Read(ref _accelerationLogCount) >= MaxTrackedAccelerations)
         {
             // Only the log de-duplication marker is dropped; playback is unaffected.
-            _lastAccelerationLoggedTicks.Clear();
+            ClearAccelerationLog();
         }
 
         var now = DateTime.UtcNow.Ticks;
-        var shouldLog = false;
 
-        _lastAccelerationLoggedTicks.AddOrUpdate(
-            itemId,
-            _ =>
-            {
-                shouldLog = true;
-                return now;
-            },
-            (_, previous) =>
-            {
-                if (now - previous < AccelerationLogInterval.Ticks)
-                {
-                    return previous;
-                }
+        // TryAdd/TryUpdate instead of AddOrUpdate: the count only changes when an entry is really
+        // inserted, so the bound stays accurate without reading the whole dictionary.
+        if (_lastAccelerationLoggedTicks.TryAdd(itemId, now))
+        {
+            Interlocked.Increment(ref _accelerationLogCount);
+            return true;
+        }
 
-                shouldLog = true;
-                return now;
-            });
+        if (!_lastAccelerationLoggedTicks.TryGetValue(itemId, out var previous)
+            || now - previous < AccelerationLogInterval.Ticks)
+        {
+            return false;
+        }
 
-        return shouldLog;
+        return _lastAccelerationLoggedTicks.TryUpdate(itemId, now, previous);
+    }
+
+    private void ClearAccelerationLog()
+    {
+        _lastAccelerationLoggedTicks.Clear();
+        Interlocked.Exchange(ref _accelerationLogCount, 0);
     }
 
     private void ScheduleBackgroundProbe(BaseItem item, EffectivePlaybackPolicy policy, int delaySeconds)
@@ -296,7 +314,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         if (hasStreamInfo)
         {
             // The item now has stream info, so its "missing stream info" marker is obsolete.
-            _warnedItems.TryRemove(item.Id, out _);
+            ForgetWarned(item.Id);
             return;
         }
 
@@ -307,17 +325,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         if (hasVideoStream)
         {
             // Video stream information is available, so the warning marker is obsolete.
-            _warnedItems.TryRemove(item.Id, out _);
+            ForgetWarned(item.Id);
             return;
         }
 
-        if (_warnedItems.Count >= MaxWarnedItems)
-        {
-            // Only the log de-duplication marker is dropped; playback is unaffected.
-            _warnedItems.Clear();
-        }
-
-        if (!_warnedItems.TryAdd(item.Id, 0))
+        if (!MarkWarned(item.Id))
         {
             return;
         }
@@ -337,6 +349,41 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             + "Playback progress is kept, but background probing is disabled, so the duration/track "
             + "information stays unavailable until a probe runs (enable background probing or run an incremental probe).",
             LogSafe.Name(item));
+    }
+
+    /// <summary>
+    /// 记录「该条目的告警已经输出过」。返回 <c>false</c> 表示之前已经记过，本次不必再输出。
+    /// </summary>
+    /// <remarks>
+    /// 用自增计数器判定上限，避免在 PlaybackInfo 热路径上调用
+    /// <c>ConcurrentDictionary.Count</c>（它会锁住全部桶并遍历）。
+    /// </remarks>
+    private bool MarkWarned(Guid itemId)
+    {
+        if (Volatile.Read(ref _warnedItemCount) >= MaxWarnedItems)
+        {
+            // Only the log de-duplication marker is dropped; playback is unaffected.
+            _warnedItems.Clear();
+            Interlocked.Exchange(ref _warnedItemCount, 0);
+        }
+
+        if (!_warnedItems.TryAdd(itemId, 0))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _warnedItemCount);
+        return true;
+    }
+
+    /// <summary>条目已经有流信息，丢弃它的告警标记（让计数跟着一起减）。</summary>
+    private void ForgetWarned(Guid itemId)
+    {
+        if (_warnedItems.TryRemove(itemId, out _) && Interlocked.Decrement(ref _warnedItemCount) < 0)
+        {
+            // 上限清理会整体清空字典，此时计数已经被重置；夹到 0 以免长期偏移。
+            Interlocked.Exchange(ref _warnedItemCount, 0);
+        }
     }
 
     // ── All remaining members: 100% delegation to _inner ──

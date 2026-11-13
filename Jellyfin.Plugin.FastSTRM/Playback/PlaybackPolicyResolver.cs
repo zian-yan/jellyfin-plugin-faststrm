@@ -43,9 +43,13 @@ public sealed class PlaybackPolicyResolver
     /// <summary>
     /// 内容指纹的最短重算间隔。配置对象引用没变时，最多这么久才重新比对一次内容：
     /// 播放热路径（每次 PlaybackInfo / 进度上报）不再遍历全部用户策略，
-    /// 同时仍能在「同一个配置对象被原地改动」时于 1 秒内发现。
+    /// 同时仍能在「同一个配置对象被原地改动」时于 5 秒内发现。
     /// </summary>
-    private static readonly TimeSpan FingerprintInterval = TimeSpan.FromSeconds(1);
+    /// <remarks>
+    /// 1 秒的间隔意味着播放期间每秒都要遍历一遍用户策略并算哈希；配置是人工保存的动作，
+    /// 5 秒的发现延迟完全够用，而热路径上少掉这次遍历。
+    /// </remarks>
+    private static readonly TimeSpan FingerprintInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// 本次播放策略记录的上限。条目只用于「同一次播放内保持一致」，播放量再大也不该常驻，
@@ -58,11 +62,20 @@ public sealed class PlaybackPolicyResolver
     private readonly ConcurrentDictionary<string, byte> _warnedEntries = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// <see cref="_warnedEntries"/> 的条目数。用计数而不是 <c>Count</c>：后者要锁住全部桶并遍历，
+    /// 而这里的调用点分布在播放与配置解析路径上。
+    /// </summary>
+    private int _warnedEntryCount;
+
+    /// <summary>
     /// 条目 Id → 取源时解析出的生效策略。播放进度上报没有用户参数，
     /// 不能重新解析（会话可能刚好结束，反查不到用户就会退回全局策略），
     /// 因此用取源时的结论贯穿整次播放。
     /// </summary>
     private readonly ConcurrentDictionary<Guid, EffectivePlaybackPolicy> _playbackPolicies = new();
+
+    /// <summary><see cref="_playbackPolicies"/> 的条目数（理由同 <see cref="_warnedEntryCount"/>）。</summary>
+    private int _playbackPolicyCount;
 
     /// <summary>
     /// 上一次计算内容指纹的时间（UTC ticks，0 表示从未算过）。只用于给 <see cref="FingerprintInterval"/>
@@ -147,13 +160,22 @@ public sealed class PlaybackPolicyResolver
             return;
         }
 
-        if (_playbackPolicies.Count >= MaxTrackedPlaybackPolicies)
+        if (Volatile.Read(ref _playbackPolicyCount) >= MaxTrackedPlaybackPolicies)
         {
             // 只是「本次播放」的旁路缓存：清空后进度上报会退回会话反查 / 全局策略。
             _playbackPolicies.Clear();
+            Interlocked.Exchange(ref _playbackPolicyCount, 0);
         }
 
-        _playbackPolicies[itemId] = policy;
+        if (_playbackPolicies.TryAdd(itemId, policy))
+        {
+            Interlocked.Increment(ref _playbackPolicyCount);
+        }
+        else
+        {
+            // 已有记录：覆盖本次播放的策略，条目数不变。
+            _playbackPolicies[itemId] = policy;
+        }
     }
 
     /// <summary>
@@ -457,13 +479,20 @@ public sealed class PlaybackPolicyResolver
 
     private bool ShouldWarn(string key)
     {
-        if (_warnedEntries.Count >= MaxWarnedEntries)
+        if (Volatile.Read(ref _warnedEntryCount) >= MaxWarnedEntries)
         {
             // 只是日志去重标记，清空只会让某条告警之后再出现一次。
             _warnedEntries.Clear();
+            Interlocked.Exchange(ref _warnedEntryCount, 0);
         }
 
-        return _warnedEntries.TryAdd(key, 0);
+        if (!_warnedEntries.TryAdd(key, 0))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _warnedEntryCount);
+        return true;
     }
 
     /// <summary>

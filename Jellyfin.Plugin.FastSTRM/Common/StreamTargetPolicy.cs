@@ -66,6 +66,15 @@ internal static class StreamTargetPolicy
                 return false;
             }
 
+            // 6to4（2002::/16）与 NAT64（64:ff9b::/96）把 IPv4 地址嵌在 IPv6 里。
+            // 只看 IPv6 位模式会漏掉其中的私网/链路本地地址：在 NAT64 网络里
+            // 64:ff9b::a00:5 就是 10.0.0.5，等于给 SSRF 留了一条旁路。
+            // 两种前缀都已不被新的媒体源使用，按内嵌的 IPv4 地址判定即可。
+            if (TryExtractEmbeddedIPv4(address, out var embedded))
+            {
+                return IsAllowed(embedded, allowPrivateTargets);
+            }
+
             return address.IsIPv6UniqueLocal ? allowPrivateTargets : true;
         }
 
@@ -112,5 +121,40 @@ internal static class StreamTargetPolicy
         }
 
         return IsAllowed(address, allowPrivateTargets);
+    }
+
+    /// <summary>
+    /// 取出 6to4 / NAT64 地址里内嵌的 IPv4 地址。
+    /// </summary>
+    /// <remarks>
+    /// 只处理这两个前缀：IPv4-mapped（<c>::ffff:0:0/96</c>）已由
+    /// <see cref="IPAddress.IsIPv4MappedToIPv6"/> 在建连前归一，Teredo 内嵌的是经过混淆的
+    /// 地址与端口，没有可判定的语义，因此不在此列。
+    /// </remarks>
+    private static bool TryExtractEmbeddedIPv4(IPAddress address, out IPAddress embedded)
+    {
+        embedded = IPAddress.None;
+
+        var bytes = address.GetAddressBytes();
+        if (bytes.Length != 16)
+        {
+            return false;
+        }
+
+        // 6to4: 2002:AABB:CCDD::/48，第 2–5 字节就是 IPv4。
+        if (bytes[0] == 0x20 && bytes[1] == 0x02)
+        {
+            embedded = new IPAddress(new[] { bytes[2], bytes[3], bytes[4], bytes[5] });
+            return true;
+        }
+
+        // NAT64 well-known prefix: 64:ff9b::/96，最后 4 字节是 IPv4。
+        if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xFF && bytes[3] == 0x9B)
+        {
+            embedded = new IPAddress(new[] { bytes[12], bytes[13], bytes[14], bytes[15] });
+            return true;
+        }
+
+        return false;
     }
 }

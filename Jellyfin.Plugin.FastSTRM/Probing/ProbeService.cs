@@ -67,6 +67,14 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static readonly TimeSpan SummaryCacheTtl = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// How long the materialised .strm item list is reused. Deliberately longer than
+    /// <see cref="SummaryCacheTtl"/>: the list is the expensive part (a full video-library scan
+    /// filtered in memory), and a probe run always rescans it, so a stale entry can only make the
+    /// counters lag — never make a probe miss an item.
+    /// </summary>
+    private static readonly TimeSpan StrmListCacheTtl = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Minimum interval between two progress log lines during a full library probe.
     /// </summary>
     private static readonly TimeSpan ProgressLogInterval = TimeSpan.FromSeconds(10);
@@ -92,27 +100,42 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly object _lock = new();
 
     /// <summary>
-    /// Serializes replacement of the probe gate so a configuration change cannot swap it out
-    /// while probes are still waiting on the previous instance.
-    /// </summary>
-    private readonly object _probeGateLock = new();
-
-    /// <summary>
     /// Gate that keeps the number of concurrently running probes bounded by the configured
     /// <see cref="PluginConfiguration.MaxConcurrentProbes"/> (1 by default).
     /// </summary>
-    private SemaphoreSlim _probeGate = new(1, 1);
-    private int _probeGateLimit = 1;
-    private int _activeProbes;
+    /// <remarks>
+    /// 上限在每次占位时重新读取，因此配置保存后立即生效，不需要重建信号量。旧实现会换一个新
+    /// <see cref="SemaphoreSlim"/>，替换瞬间新旧两个信号量同时放行，配置调小上限时并发会短暂超标。
+    /// </remarks>
+    private readonly ConcurrencyGate _probeGate = new(GetConfiguredProbeLimit);
+
     private long _lastProgressLogTicks;
 
     /// <summary>
-    /// Guards <see cref="_summaryCache"/> so the whole-library scan behind a summary request
-    /// runs once per <see cref="SummaryCacheTtl"/> instead of once per page view.
+    /// Guards <see cref="ComputeSummary"/> so two concurrent requests cannot run the whole-library
+    /// scan at the same time. Requests never wait on it: they get the last snapshot and let a
+    /// single background refresh update it.
     /// </summary>
     private readonly object _summaryLock = new();
-    private (int Total, int Probed, int Unprobed, int SizeMissing) _summaryCache;
-    private long _summaryCacheUtcTicks;
+
+    /// <summary>Last computed summary, or null before the first computation.</summary>
+    private volatile SummarySnapshot? _summaryCache;
+
+    /// <summary>
+    /// Cached .strm item list. <c>GetItemList</c> materialises every video item in the library and
+    /// Jellyfin 12 has no way to filter by extension in the query, so recomputing it per page view
+    /// dominated the cost of the summary endpoint. Invalidated by age only: entries are the same
+    /// live <see cref="BaseItem"/> instances Jellyfin keeps in its cache, so their fields stay fresh.
+    /// </summary>
+    private volatile IReadOnlyList<BaseItem>? _strmItems;
+
+    private long _strmItemsUtcTicks;
+
+    /// <summary>
+    /// Single-flight marker for the background summary refresh (0 = idle, 1 = running).
+    /// </summary>
+    private int _summaryRefreshRunning;
+
     private long _lastPruneUtcTicks;
 
     /// <summary>
@@ -149,6 +172,13 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// Items whose automatic (item added) probe is currently running.
     /// </summary>
     private readonly ConcurrentDictionary<Guid, byte> _autoProbeInFlight = new();
+
+    /// <summary>
+    /// Number of auto-probe tasks queued or running. Kept as a counter instead of
+    /// <c>_autoProbeTasks.Count</c>: the later acquires every bucket lock and this check runs on
+    /// Jellyfin's library scan thread for every imported item.
+    /// </summary>
+    private int _queuedAutoProbes;
 
     private static readonly TimeSpan PlaybackProbeRetryInterval = TimeSpan.FromMinutes(10);
 
@@ -324,9 +354,16 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         // 「入库自动探测」是补全的三个触发点之一，关闭时整条入库链路不动作。
-        // 开启后，无论条目是否已有流信息，只要大小缺失就补大小。
         var autoProbeEnabled = Plugin.Instance?.Configuration is { EnableAutoProbe: true };
-        if (!ShouldHandleNewItem(item, autoProbeEnabled, out var runFullProbe))
+        if (!autoProbeEnabled)
+        {
+            return;
+        }
+
+        // 廉价预筛，**绝不在这里做文件 stat**：ItemAdded 跑在库扫描线程上，一次大库扫描
+        // 每个 .strm 都 stat 一遍就是把扫描时间交给网络存储。精确判定（大小是否仍等于
+        // .strm 文本文件长度）留给后台任务，那里已经有线程池和并发门兜着。
+        if (HasStreamInfo(item) && !RemoteSizeService.NeedsRemoteSize(item))
         {
             return;
         }
@@ -337,16 +374,17 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        var pendingCount = _autoProbeTasks.Count;
-        if (pendingCount >= MaxQueuedAutoProbes)
+        var pendingCount = Interlocked.Increment(ref _queuedAutoProbes);
+        if (pendingCount > MaxQueuedAutoProbes)
         {
             // A scan of a very large library must not turn into an unbounded task queue. The
             // item still gets probed by the next incremental run, so dropping it here is safe.
+            Interlocked.Decrement(ref _queuedAutoProbes);
             _autoProbeInFlight.TryRemove(item.Id, out _);
             _logger.LogDebug(
                 "FastSTRM: Skipping auto-probe for {Name}; {Pending} probes are already pending",
                 LogSafe.Name(item, MaxLoggedNameLength),
-                pendingCount);
+                pendingCount - 1);
             return;
         }
 
@@ -356,17 +394,21 @@ public sealed class ProbeService : IHostedService, IDisposable
             // must stay inside the try: an exception escaping here would propagate into Jellyfin's
             // ItemAdded invocation during shutdown.
             var token = _shutdownCts?.Token ?? CancellationToken.None;
-            var task = Task.Run(() => RunAutoProbeAsync(item, runFullProbe, token));
+            var task = Task.Run(() => RunAutoProbeAsync(item, token));
             _autoProbeTasks[item.Id] = task;
-            if (task.IsCompleted)
-            {
-                _autoProbeTasks.TryRemove(item.Id, out _);
-            }
+
+            // 按值移除，理由同 SchedulePlaybackProbe：按 key 删除会误删后来调度的那一个。
+            _ = task.ContinueWith(
+                completed => _autoProbeTasks.TryRemove(new KeyValuePair<Guid, Task>(item.Id, completed)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
         catch (Exception ex)
         {
             // Never let a scheduling failure both escape the event handler and leave the item
             // permanently marked as "already being probed".
+            Interlocked.Decrement(ref _queuedAutoProbes);
             _autoProbeInFlight.TryRemove(item.Id, out _);
             _logger.LogDebug(ex, "FastSTRM: Unable to schedule the auto-probe for {Name}", LogSafe.Name(item, MaxLoggedNameLength));
         }
@@ -437,14 +479,22 @@ public sealed class ProbeService : IHostedService, IDisposable
             ? RemoteSizeTrigger.ManualFullProbe
             : RemoteSizeTrigger.ManualIncrementalProbe;
 
-    private async Task RunAutoProbeAsync(BaseItem item, bool runFullProbe, CancellationToken cancellationToken)
+    private async Task RunAutoProbeAsync(BaseItem item, CancellationToken cancellationToken)
     {
-        SemaphoreSlim? gate = null;
+        var slotTaken = false;
         try
         {
+            // 精确判定放在后台：ShouldHandleNewItem 里的 IsRemoteSizeMissing 会 stat .strm 文件，
+            // 这个 IO 不该落在库扫描线程上（调度点只做了无 IO 的廉价预筛）。
+            if (!ShouldHandleNewItem(item, autoProbeEnabled: true, out var runFullProbe))
+            {
+                return;
+            }
+
             // Bounded fan-out: at most GetMaxConcurrentProbes() probes run at the same time, the
             // rest wait here (and are cancellable on shutdown).
-            gate = await AcquireProbeSlotAsync(cancellationToken).ConfigureAwait(false);
+            await AcquireProbeSlotAsync(cancellationToken).ConfigureAwait(false);
+            slotTaken = true;
 
             if (runFullProbe)
             {
@@ -471,13 +521,15 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
         finally
         {
-            if (gate is not null)
+            if (slotTaken)
             {
-                ReleaseProbeSlot(gate);
+                ReleaseProbeSlot();
             }
 
+            // 先释放单飞标记，再让 ContinueWith 按值清掉任务表项：否则一个稍后调度的同名任务
+            // 可能被这里按 key 删掉，关闭时就等不到它了。
             _autoProbeInFlight.TryRemove(item.Id, out _);
-            _autoProbeTasks.TryRemove(item.Id, out _);
+            Interlocked.Decrement(ref _queuedAutoProbes);
         }
     }
 
@@ -640,36 +692,95 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Returns a summary of .strm items in the library. The result is cached for
-    /// <see cref="SummaryCacheTtl"/> because computing it scans the whole video library.
+    /// Returns a summary of .strm items in the library.
     /// </summary>
-    /// <param name="forceRefresh">Bypasses the cache, e.g. right after a probe finished.</param>
+    /// <param name="forceRefresh">
+    /// Recomputes synchronously. Used right after a probe run, when the caller is waiting for the
+    /// new counters. Without it the call never blocks on a library scan: a stale snapshot is
+    /// returned as-is and a single background refresh updates it for the next poll.
+    /// </param>
     /// <returns>
     /// Total, probed and unprobed item counts plus the number of items whose stored size is still
     /// the size of the .strm text file instead of the remote media.
     /// </returns>
+    /// <remarks>
+    /// 旧实现在请求线程上持锁扫全库，并对每个待补条目做一次 <c>FileInfo.Length</c>。库在
+    /// SMB/NFS 上时，配置页每次打开都可能卡住数秒，两个并发请求还会互相排队——而缓存本来
+    /// 就是为了不阻塞，所以改成 stale-while-revalidate + 单飞后台刷新。
+    /// </remarks>
     public (int Total, int Probed, int Unprobed, int SizeMissing) GetSummary(bool forceRefresh = false)
+    {
+        var cached = _summaryCache;
+
+        if (cached is not null && !forceRefresh)
+        {
+            if (!IsFresh(cached.UtcTicks, DateTime.UtcNow.Ticks, SummaryCacheTtl))
+            {
+                QueueSummaryRefresh();
+            }
+
+            return cached.ToTuple();
+        }
+
+        // forceRefresh，或进程启动后的第一次请求：同步算一次，保证接口第一次就有正确数字。
+        return ComputeSummary().ToTuple();
+    }
+
+    private SummarySnapshot ComputeSummary()
     {
         lock (_summaryLock)
         {
-            var now = DateTime.UtcNow;
-            var ageTicks = now.Ticks - _summaryCacheUtcTicks;
-            if (!forceRefresh
-                && _summaryCacheUtcTicks != 0
-                && ageTicks >= 0
-                && ageTicks < SummaryCacheTtl.Ticks)
-            {
-                return _summaryCache;
-            }
-
             var items = GetStrmItems();
             var probed = items.Count(HasStreamInfo);
+
             // 用统计口径而不是补全门槛：4 KiB–1 MiB 的短片写对后不该继续被算成「缺少大小」。
             var sizeMissing = items.Count(RemoteSizeService.IsRemoteSizeMissing);
-            _summaryCache = (items.Count, probed, items.Count - probed, sizeMissing);
-            _summaryCacheUtcTicks = now.Ticks;
-            return _summaryCache;
+            var snapshot = new SummarySnapshot(
+                items.Count,
+                probed,
+                items.Count - probed,
+                sizeMissing,
+                DateTime.UtcNow.Ticks);
+
+            _summaryCache = snapshot;
+            return snapshot;
         }
+    }
+
+    /// <summary>
+    /// Starts one background summary refresh, if none is running. The request keeps its stale
+    /// snapshot, so a slow library scan can no longer hold an HTTP response open.
+    /// </summary>
+    private void QueueSummaryRefresh()
+    {
+        if (Interlocked.CompareExchange(ref _summaryRefreshRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Let the caller return the stale value first, then scan the library.
+                await Task.Yield();
+                ComputeSummary();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "FastSTRM: Unable to refresh the .strm summary in the background");
+            }
+            finally
+            {
+                Volatile.Write(ref _summaryRefreshRunning, 0);
+            }
+        });
+    }
+
+    private static bool IsFresh(long utcTicks, long nowTicks, TimeSpan ttl)
+    {
+        var age = nowTicks - utcTicks;
+        return age >= 0 && age < ttl.Ticks;
     }
 
     /// <summary>
@@ -846,12 +957,14 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             var task = Task.Run(() => RunPlaybackProbeAsync(item, runFullProbe, initialDelay, probeCts));
             _playbackProbeTasks[item.Id] = task;
-            if (task.IsCompleted)
-            {
-                // The probe can finish before the assignment above; do not leave a completed
-                // task in the map (shutdown would otherwise keep awaiting stale entries).
-                _playbackProbeTasks.TryRemove(item.Id, out _);
-            }
+
+            // 按值移除：任务可能已经结束、也可能在同一条目被重新调度后才有机会清理，
+            // 按 key 删除会误删别人的登记项。ExecuteSynchronously 保证已经完成的任务立刻清掉。
+            _ = task.ContinueWith(
+                completed => _playbackProbeTasks.TryRemove(new KeyValuePair<Guid, Task>(item.Id, completed)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
 
             return true;
         }
@@ -901,15 +1014,20 @@ public sealed class ProbeService : IHostedService, IDisposable
                     return;
                 }
 
-                var sizeGate = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                var sizeSlotTaken = false;
                 long? size;
                 try
                 {
+                    await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                    sizeSlotTaken = true;
                     size = await FillRemoteSizeAsync(item, RemoteSizeTrigger.PlaybackProbe, token).ConfigureAwait(false);
                 }
                 finally
                 {
-                    ReleaseProbeSlot(sizeGate);
+                    if (sizeSlotTaken)
+                    {
+                        ReleaseProbeSlot();
+                    }
                 }
 
                 if (size is not null)
@@ -956,14 +1074,19 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 // A failed probe does not throw: Jellyfin logs the provider error and lets the
                 // refresh finish, so the runtime is the only reliable success signal.
-                var gate = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                var slotTaken = false;
                 try
                 {
+                    await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                    slotTaken = true;
                     await ProbeItemAsync(item, RemoteSizeTrigger.PlaybackProbe, token).ConfigureAwait(false);
                 }
                 finally
                 {
-                    ReleaseProbeSlot(gate);
+                    if (slotTaken)
+                    {
+                        ReleaseProbeSlot();
+                    }
                 }
 
                 var probedRuntimeTicks = GetProbedRuntimeTicks(item);
@@ -1016,10 +1139,13 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
         finally
         {
+            // 先释放单飞标记，再按**值**移除自己的登记项。按 key 删除有竞态：旧任务删掉
+            // in-flight 标记后，新任务可能已经写入同一个 key，随后被旧任务连坐删除——关闭时
+            // 等不到它，停播事件也取消不到它。任务表项由 SchedulePlaybackProbe 注册的
+            // 续延按值清除（见该方法），这里只处理取消源。
             _playbackProbeInFlight.TryRemove(item.Id, out _);
-            _playbackProbeTasks.TryRemove(item.Id, out _);
-            // 已登记的 CTS 就是 probeCts 本身，这里只从表里摘掉，统一在最后释放一次。
-            _playbackProbeCancellation.TryRemove(item.Id, out _);
+            _playbackProbeCancellation.TryRemove(
+                new KeyValuePair<Guid, CancellationTokenSource>(item.Id, probeCts));
             probeCts.Dispose();
         }
     }
@@ -1040,7 +1166,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             // The library scan stays off the caller's lock: on a large library it takes seconds
             // and would otherwise block StopProbe and this task's own finally block.
-            var items = GetStrmItems();
+            // 探测必须用最新的库列表：缓存可能是几分钟前的，漏掉新入库的条目就等于这次没探。
+            var items = GetStrmItems(forceRefresh: true);
             if (incremental)
             {
                 // 远端大小补全已并入增量探测，不再有单独的模式：
@@ -1061,23 +1188,28 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             var total = items.Count;
-            var limit = GetConfiguredProbeLimit();
             var probeIndex = 0;
             Volatile.Write(ref _lastProgressLogTicks, 0);
 
+            // 真正的并发上限由 _probeGate 统一裁决（起播补探测、入库补探测也走它，共享同一个
+            // 额度）。这里只提供一个固定的背压窗口：排队中的条目数不必等于上限，够用即可，
+            // 免得再表达一遍同一个限制、把配置值理解成两个相互独立的开关。
             var options = new ParallelOptions
             {
-                MaxDegreeOfParallelism = limit,
+                MaxDegreeOfParallelism = PluginConfiguration.MaxConcurrentProbesLimit,
                 CancellationToken = ct
             };
 
             await Parallel.ForEachAsync(items, options, async (item, token) =>
             {
-                var gate = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
                 var name = LogSafe.Name(item, MaxDisplayedNameLength);
+                var slotTaken = false;
 
                 try
                 {
+                    await AcquireProbeSlotAsync(token).ConfigureAwait(false);
+                    slotTaken = true;
+
                     var index = Interlocked.Increment(ref probeIndex);
                     CurrentItemName = name;
                     LogProgress(index, total, name);
@@ -1102,7 +1234,10 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
                 finally
                 {
-                    ReleaseProbeSlot(gate);
+                    if (slotTaken)
+                    {
+                        ReleaseProbeSlot();
+                    }
                 }
 
                 Interlocked.Increment(ref _processedItems);
@@ -1159,31 +1294,11 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static int GetConfiguredProbeLimit()
         => Plugin.Instance?.Configuration.GetMaxConcurrentProbes() ?? PluginConfiguration.MinConcurrentProbes;
 
-    private async Task<SemaphoreSlim> AcquireProbeSlotAsync(CancellationToken cancellationToken)
-    {
-        SemaphoreSlim gate;
-        lock (_probeGateLock)
-        {
-            var limit = GetConfiguredProbeLimit();
-            if (limit != _probeGateLimit && Volatile.Read(ref _activeProbes) == 0)
-            {
-                _probeGate = new SemaphoreSlim(limit, limit);
-                _probeGateLimit = limit;
-            }
+    private Task AcquireProbeSlotAsync(CancellationToken cancellationToken)
+        => _probeGate.AcquireAsync(cancellationToken);
 
-            gate = _probeGate;
-        }
-
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        Interlocked.Increment(ref _activeProbes);
-        return gate;
-    }
-
-    private void ReleaseProbeSlot(SemaphoreSlim gate)
-    {
-        Interlocked.Decrement(ref _activeProbes);
-        gate.Release();
-    }
+    private void ReleaseProbeSlot()
+        => _probeGate.Release();
 
     private async Task ProbeItemAsync(BaseItem item, RemoteSizeTrigger trigger, CancellationToken ct)
     {
@@ -1252,9 +1367,31 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private List<BaseItem> GetStrmItems()
+    /// <summary>
+    /// Returns the .strm items in the library.
+    /// </summary>
+    /// <param name="forceRefresh">
+    /// Rescans the library. A probe run always does this: the cached list may be minutes old and a
+    /// probe must never skip an item added after it was built.
+    /// </param>
+    /// <remarks>
+    /// The scan cannot be pushed into the query: Jellyfin 12's <c>InternalItemsQuery</c> has no
+    /// extension/path filter, so the whole video library is materialised and filtered in memory.
+    /// That is why the result is cached for <see cref="StrmListCacheTtl"/> for the summary endpoint.
+    /// </remarks>
+    private IReadOnlyList<BaseItem> GetStrmItems(bool forceRefresh = false)
     {
-        return _libraryManager
+        if (!forceRefresh)
+        {
+            var cached = _strmItems;
+            if (cached is not null
+                && IsFresh(Volatile.Read(ref _strmItemsUtcTicks), DateTime.UtcNow.Ticks, StrmListCacheTtl))
+            {
+                return cached;
+            }
+        }
+
+        var items = _libraryManager
             .GetItemList(new InternalItemsQuery
             {
                 MediaTypes = new[] { MediaType.Video },
@@ -1262,6 +1399,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             })
             .Where(IsStrmItem)
             .ToList();
+
+        _strmItems = items;
+        Volatile.Write(ref _strmItemsUtcTicks, DateTime.UtcNow.Ticks);
+        return items;
     }
 
     private static bool IsStrmItem(BaseItem item)
@@ -1423,8 +1564,37 @@ public sealed class ProbeService : IHostedService, IDisposable
         // Disposing it here could race with a running RefreshMetadata call.
         _shutdownCts?.Dispose();
 
-        // _probeGate is intentionally not disposed: a queued probe may still be waiting on it,
+        // The probe gate is intentionally not disposed: a queued probe may still be waiting on it,
         // and disposing it underneath that waiter would throw instead of cancelling cleanly
         // (the shutdown token above already unblocks them).
+    }
+
+    /// <summary>
+    /// 一次汇总计算的结果连同它的计算时间。两个字段放在同一个不可变对象里，
+    /// 读者一次读取就能拿到「值 + 年龄」，不会读到新值配旧时间戳的撕裂状态。
+    /// </summary>
+    private sealed class SummarySnapshot
+    {
+        public SummarySnapshot(int total, int probed, int unprobed, int sizeMissing, long utcTicks)
+        {
+            Total = total;
+            Probed = probed;
+            Unprobed = unprobed;
+            SizeMissing = sizeMissing;
+            UtcTicks = utcTicks;
+        }
+
+        public int Total { get; }
+
+        public int Probed { get; }
+
+        public int Unprobed { get; }
+
+        public int SizeMissing { get; }
+
+        public long UtcTicks { get; }
+
+        public (int Total, int Probed, int Unprobed, int SizeMissing) ToTuple()
+            => (Total, Probed, Unprobed, SizeMissing);
     }
 }

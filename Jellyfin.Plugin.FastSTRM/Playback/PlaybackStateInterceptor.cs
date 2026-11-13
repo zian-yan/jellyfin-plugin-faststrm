@@ -66,6 +66,13 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
     /// </summary>
     private readonly ConcurrentDictionary<Guid, byte> _preservedItems = new();
 
+    /// <summary>
+    /// Number of entries in <see cref="_preservedItems"/>. Progress reports arrive every few
+    /// seconds per playing session, so the bound check must not pay for
+    /// <c>ConcurrentDictionary.Count</c> (it locks every bucket and walks all entries).
+    /// </summary>
+    private int _preservedItemCount;
+
     public PlaybackStateInterceptor(
         IUserDataManager inner,
         IServiceProvider serviceProvider,
@@ -126,7 +133,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
         {
             // The background probe has stored a duration, so the "position preserved" marker for
             // this item is obsolete. Dropping it keeps the map bounded by the unprobed items.
-            _preservedItems.TryRemove(item.Id, out _);
+            ForgetPreserved(item.Id);
         }
 
         // Only .strm items whose duration is still unknown are affected by Jellyfin's
@@ -161,13 +168,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
 
             if (reportedPositionTicks.Value > 0)
             {
-                if (_preservedItems.Count >= MaxPreservedItems)
-                {
-                    // Only the log de-duplication marker is dropped; playback is unaffected.
-                    _preservedItems.Clear();
-                }
-
-                if (_preservedItems.TryAdd(item.Id, 0))
+                if (MarkPreserved(item.Id))
                 {
                     if (backgroundProbeDelaySeconds.HasValue)
                     {
@@ -204,6 +205,35 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
     private static bool IsStrmItem(BaseItem item)
         => item.Path is not null
            && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 记录「该条目的保位提示已经输出过」。返回 <c>false</c> 表示之前已经记过。
+    /// </summary>
+    private bool MarkPreserved(Guid itemId)
+    {
+        if (Volatile.Read(ref _preservedItemCount) >= MaxPreservedItems)
+        {
+            // Only the log de-duplication marker is dropped; playback is unaffected.
+            _preservedItems.Clear();
+            Interlocked.Exchange(ref _preservedItemCount, 0);
+        }
+
+        if (!_preservedItems.TryAdd(itemId, 0))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _preservedItemCount);
+        return true;
+    }
+
+    private void ForgetPreserved(Guid itemId)
+    {
+        if (_preservedItems.TryRemove(itemId, out _) && Interlocked.Decrement(ref _preservedItemCount) < 0)
+        {
+            Interlocked.Exchange(ref _preservedItemCount, 0);
+        }
+    }
 
     private static bool HasKnownRuntime(BaseItem item)
         => item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
