@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.6.7] - 2026-11-14
 
+### 新增
+
+- 播放取源诊断日志：每次 `PlaybackInfo` 输出一行 Info，包含该条目的第几次取源、距上次毫秒数、命中分支（`ready` / `skip-probe` / `instant-no-probe` / `official-probe`）、`allowMediaProbe`、`RunTimeTicks`、`Size`、`.strm` 文件字节数、返回的源/流数量与本次耗时，用于判断一次起播究竟触发了几次取源、每次差在哪里。仅 `.strm` 条目输出，非 `.strm` 仍完全透传且不产生日志。
+
 ### 变更
 
 - 代码瘦身（纯内部重构，功能与行为不变）：C# 源码 6573 → 4830 行；插件本体 5122 → 3507 行（-31.5%）。
@@ -28,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 验证
 
 - 构建 0 警告 0 错误；105 个单元测试全部通过，与重构前基线一致。
+- 取源诊断日志经独立宿主实测：`ready` 与 `skip-probe` 两条分支的取源序号、距上次间隔、源/流计数与耗时输出正确。
 
 ---
 

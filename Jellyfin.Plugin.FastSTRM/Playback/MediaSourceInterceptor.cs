@@ -3,6 +3,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,7 +30,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
     private const int MaxTrackedAccelerations = 8192;
 
+    private const int MaxTrackedPlaybackCalls = 8192;
+
     private static readonly TimeSpan AccelerationLogInterval = TimeSpan.FromSeconds(5);
+
+    private static readonly TimeSpan PlaybackCallWindow = TimeSpan.FromSeconds(30);
 
     private readonly IMediaSourceManager _inner;
     private readonly ILogger<MediaSourceInterceptor> _logger;
@@ -39,6 +45,10 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     private readonly ConcurrentDictionary<Guid, long> _lastAccelerationLoggedTicks = new();
 
     private int _accelerationLogCount;
+
+    private readonly ConcurrentDictionary<Guid, PlaybackCall> _playbackCalls = new();
+
+    private int _playbackCallCount;
 
     private readonly bool _disposeInner;
 
@@ -74,6 +84,25 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 .ConfigureAwait(false);
         }
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var (call, gapMs) = TrackPlaybackCall(item.Id);
+
+        var (sources, branch) = await ResolveStrmSourcesAsync(
+            item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
+            .ConfigureAwait(false);
+
+        LogPlaybackCall(item, call, gapMs, branch, allowMediaProbe, sources, Stopwatch.GetElapsedTime(startedAt));
+
+        return sources;
+    }
+
+    private async Task<(IReadOnlyList<MediaSourceInfo> Sources, string Branch)> ResolveStrmSourcesAsync(
+        BaseItem item,
+        User user,
+        bool allowMediaProbe,
+        bool enablePathSubstitution,
+        CancellationToken cancellationToken)
+    {
         if (IsPlaybackReady(item))
         {
             var readySources = await _inner.GetPlaybackMediaSources(
@@ -81,7 +110,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 .ConfigureAwait(false);
 
             LogAccelerationSucceeded(item);
-            return readySources;
+            return (readySources, "ready");
         }
 
         var hasStreamInfo = StrmItem.HasStreamInfo(item);
@@ -89,18 +118,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         _policyResolver.RememberPlaybackPolicy(item.Id, policy);
 
-        var skipProbe = hasStreamInfo || policy.SkipProbe;
-
-        if (!skipProbe)
+        if (!hasStreamInfo && !policy.SkipProbe)
         {
             _logger.LogDebug(
                 "FastSTRM: Unprobed .strm, falling back to the official media probe for {Name} (PolicySource={Source})",
                 LogSafe.Name(item),
                 policy.Source);
 
-            return await _inner.GetPlaybackMediaSources(
+            var probedSources = await _inner.GetPlaybackMediaSources(
                 item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
                 .ConfigureAwait(false);
+
+            return (probedSources, "official-probe");
         }
 
         _logger.LogDebug(
@@ -125,8 +154,96 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         _remoteSize.ApplyCachedSizeToSources(item, sources);
 
-        return sources;
+        return (sources, hasStreamInfo ? "skip-probe" : "instant-no-probe");
     }
+
+    private void LogPlaybackCall(
+        BaseItem item,
+        int call,
+        long gapMs,
+        string branch,
+        bool allowMediaProbe,
+        IReadOnlyList<MediaSourceInfo> sources,
+        TimeSpan elapsed)
+    {
+        var sourceCount = sources?.Count ?? 0;
+        var streamCount = 0;
+
+        for (var i = 0; i < sourceCount; i++)
+        {
+            streamCount += sources[i].MediaStreams?.Count ?? 0;
+        }
+
+        _logger.LogInformation(
+            "FastSTRM: 取源 #{Call} {Name} | 距上次 {Gap}ms | 分支 {Branch} | allowMediaProbe={AllowProbe} | RunTimeTicks={RuntimeTicks} | Size={Size} | strm={StrmBytes}B | 源={SourceCount} 流={StreamCount} | 耗时 {Elapsed}ms | item={ItemId}",
+            call,
+            LogSafe.Name(item),
+            gapMs,
+            branch,
+            allowMediaProbe,
+            item.RunTimeTicks,
+            item.Size,
+            ReadStrmLength(item),
+            sourceCount,
+            streamCount,
+            (long)elapsed.TotalMilliseconds,
+            ShortId(item.Id));
+    }
+
+    private (int Call, long GapMs) TrackPlaybackCall(Guid itemId)
+    {
+        if (itemId == Guid.Empty)
+        {
+            return (1, 0);
+        }
+
+        var now = DateTime.UtcNow.Ticks;
+        var windowTicks = PlaybackCallWindow.Ticks;
+
+        if (Volatile.Read(ref _playbackCallCount) >= MaxTrackedPlaybackCalls)
+        {
+            _playbackCalls.Clear();
+            Interlocked.Exchange(ref _playbackCallCount, 0);
+        }
+
+        while (true)
+        {
+            if (!_playbackCalls.TryGetValue(itemId, out var previous))
+            {
+                if (_playbackCalls.TryAdd(itemId, new PlaybackCall(now, 1)))
+                {
+                    Interlocked.Increment(ref _playbackCallCount);
+                    return (1, 0);
+                }
+
+                continue;
+            }
+
+            var gapTicks = now - previous.UtcTicks;
+            var gapMs = gapTicks > 0 ? gapTicks / TimeSpan.TicksPerMillisecond : 0;
+            var call = gapTicks >= 0 && gapTicks < windowTicks ? previous.Call + 1 : 1;
+
+            if (_playbackCalls.TryUpdate(itemId, new PlaybackCall(now, call), previous))
+            {
+                return (call, gapMs);
+            }
+        }
+    }
+
+    private static long? ReadStrmLength(BaseItem item)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(item.Path) ? null : new FileInfo(item.Path).Length;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string ShortId(Guid itemId)
+        => itemId == Guid.Empty ? "(empty)" : itemId.ToString("N")[..8];
 
     private void LogAccelerationSucceeded(BaseItem item)
     {
@@ -301,4 +418,6 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             disposable.Dispose();
         }
     }
+
+    private readonly record struct PlaybackCall(long UtcTicks, int Call);
 }
