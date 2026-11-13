@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,11 +37,29 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     /// </summary>
     private const int MaxWarnedItems = 8192;
 
+    /// <summary>
+    /// Upper bound for the "acceleration logged" marker map. Same rationale as
+    /// <see cref="MaxWarnedItems"/>: it only suppresses duplicate log lines.
+    /// </summary>
+    private const int MaxTrackedAccelerations = 8192;
+
+    /// <summary>
+    /// 同一条目在这个窗口内只输出一行「加速成功」。一次起播往往会连发两次 PlaybackInfo
+    /// （客户端先试探直连、再按结果取源），不去重会出现两条成功日志，看起来像重复计数。
+    /// </summary>
+    private static readonly TimeSpan AccelerationLogInterval = TimeSpan.FromSeconds(5);
+
     private readonly IMediaSourceManager _inner;
     private readonly ILogger<MediaSourceInterceptor> _logger;
     private readonly IServiceProvider _serviceProvider;
     private readonly PlaybackPolicyResolver _policyResolver;
     private readonly RemoteSizeService _remoteSize;
+
+    /// <summary>
+    /// Item id → UTC ticks of the last "acceleration succeeded" line, used only to collapse the
+    /// burst of PlaybackInfo calls that belongs to a single playback start.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, long> _lastAccelerationLoggedTicks = new();
 
     /// <summary>
     /// Whether this decorator is the only owner of <see cref="_inner"/>. An instance that came
@@ -110,13 +129,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         // 而这条路径的前提就是时长已入库。
         if (IsPlaybackReady(item))
         {
-            _logger.LogDebug(
-                "FastSTRM: {Name} already has stream info and its remote size; skipping every probe for instant playback",
-                LogSafe.Name(item));
-
-            return await _inner.GetPlaybackMediaSources(
+            var stopwatch = Stopwatch.StartNew();
+            var readySources = await _inner.GetPlaybackMediaSources(
                 item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
                 .ConfigureAwait(false);
+
+            // 只在取源成功返回后记录：抛异常说明这次没能加速，不能报成功。
+            LogAccelerationSucceeded(item, stopwatch.ElapsedMilliseconds);
+            return readySources;
         }
 
         var hasStreamInfo = HasStreamInfo(item);
@@ -174,6 +194,64 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         _remoteSize.ApplyCachedSizeToSources(item, sources);
 
         return sources;
+    }
+
+    /// <summary>
+    /// 输出一行「加速成功」，说明该条目被拦截后直接进入了播放，没有任何探测。
+    /// </summary>
+    /// <remarks>
+    /// Info 级别是有意的：默认日志级别下可见，管理员不用开 Debug 就能确认加速确实生效。
+    /// 同一条目在 <see cref="AccelerationLogInterval"/> 内只记一次，避免一次起播的多次
+    /// PlaybackInfo 刷出多条成功日志。
+    /// </remarks>
+    private void LogAccelerationSucceeded(BaseItem item, long elapsedMilliseconds)
+    {
+        if (!ShouldLogAcceleration(item.Id))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "FastSTRM: 加速成功 — {Name} 有流且远端大小已就绪，跳过探测直接播放（取源耗时 {ElapsedMilliseconds} ms）",
+            LogSafe.Name(item),
+            elapsedMilliseconds);
+    }
+
+    private bool ShouldLogAcceleration(Guid itemId)
+    {
+        if (itemId == Guid.Empty)
+        {
+            return true;
+        }
+
+        if (_lastAccelerationLoggedTicks.Count >= MaxTrackedAccelerations)
+        {
+            // Only the log de-duplication marker is dropped; playback is unaffected.
+            _lastAccelerationLoggedTicks.Clear();
+        }
+
+        var now = DateTime.UtcNow.Ticks;
+        var shouldLog = false;
+
+        _lastAccelerationLoggedTicks.AddOrUpdate(
+            itemId,
+            _ =>
+            {
+                shouldLog = true;
+                return now;
+            },
+            (_, previous) =>
+            {
+                if (now - previous < AccelerationLogInterval.Ticks)
+                {
+                    return previous;
+                }
+
+                shouldLog = true;
+                return now;
+            });
+
+        return shouldLog;
     }
 
     private void ScheduleBackgroundProbe(BaseItem item, EffectivePlaybackPolicy policy, int delaySeconds)
