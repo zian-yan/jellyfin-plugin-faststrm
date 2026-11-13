@@ -7,7 +7,7 @@
 <p align="center">Skip remote <code>ffprobe</code> for Jellyfin <code>.strm</code> media — click and play.</p>
 
 <p align="center">
-  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.6.3-blue" alt="Release"></a>
+  <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/badge/Release-v3.6.4-blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/Jellyfin-12.0%2B-purple" alt="Jellyfin 12.0+">
   <img src="https://img.shields.io/badge/.NET-10.0-blueviolet" alt=".NET 10.0">
   <a href="https://github.com/zian-yan/jellyfin-plugin-faststrm/releases"><img src="https://img.shields.io/github/downloads/zian-yan/jellyfin-plugin-faststrm/total?label=Downloads&color=success" alt="Downloads"></a>
@@ -81,6 +81,12 @@ PlaybackInfo request
 Routing happens in `MediaSourceInterceptor.GetPlaybackMediaSources`; `allowMediaProbe = false` stops Jellyfin from probing the remote URL, so the client receives the media source and connects directly.
 
 "Ready" means `RunTimeTicks > 0` **and** a resolved remote size. Those items take a dedicated fast path in the interceptor: no playback-policy resolution, no background-probe check, one inner call and return — so this path can neither run ffprobe nor hit the stream URL a second time.
+
+Every hit writes one **Information** line to the server log (visible without enabling debug logging), including the source-resolution time:
+
+```
+[INF] FastSTRM: 加速成功 — Some Movie 有流且远端大小已就绪，跳过探测直接播放（取源耗时 12 ms）
+```
 
 ---
 
