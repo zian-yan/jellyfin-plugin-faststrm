@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.8.0] - 2026-11-21
+
+### 安全
+
+- **默认不再允许请求内网地址**（`AllowPrivateNetworkTargets` 默认值 `true` → `false`）。`.strm` 内容完全由外部提供（用户上传、共享库、他人投喂的媒体库），默认放行等于把插件变成内网探测跳板，可以打到 `127.0.0.1`、`10.0.0.0/8`、内网管理端口（Redis / Docker API / ES 等）。局域网媒体服务器需要在配置页显式勾选「允许请求内网地址」。已有的显式配置不受影响。
+- 重定向改为手动逐跳校验。原先依赖 `AllowAutoRedirect`，直连时由建连回调兜底，但走代理时回调只看到代理地址，`公网地址 → 302 → 内网地址` 可以直接穿透。同时关闭自动重定向后，被拒的跳转不会再借 `ranged GET` 回退打第二次。
+- 目标解析失败改为 fail-closed，并把 `Any` 判据改成 `All`：多 A 记录里只要有一条非法就整体拒绝（旧实现有一条合法即放行，而代理侧可能自行挑中那条非法的）。
+- 补上 `198.18.0.0/15`、`192.0.0.0/24` 两个保留网段的拦截。
+- 远端大小查询失败时，管理员可见的 Warning 只输出失败分类；逐跳细节（状态码、Content-Type）降到 Debug，避免日志本身成为内网探测的响应指纹。
+- 远端大小缓存以「去 query 的 URL」为 key（签名参数不再作为 key），签名凭证不再在内存中长期驻留。
+- Release 工作流把 `workflow_dispatch` 的输入通过环境变量传入脚本，不再直接拼进 shell。
+
+### 性能
+
+- 列表页不再逐条做磁盘 I/O。`GetStaticMediaSources` 会为每个 `.strm` 打开文件读首行并额外 `stat` 一次；现在结果按 `(path, 长度, 写入时间)` 缓存 5 秒，稳态下零系统调用，库在 SMB/NFS 上时列表页卡顿明显改善。
+- 起播路径不再同步写库。补全远端大小后的 `UpdateItemAsync` 移到后台，起播只更新内存字段；同时 `IsRemoteSizeMissing` 复用同一份长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
+- `/FastStrm/Summary` 不再在请求线程里做全库统计。原先缓存未命中会同步跑一次无 `Limit` 的 `GetItemList` + 逐条 `stat`，十万条目直接把请求拖超时；现在始终返回现有快照并在后台计算，插件启动时预热一次。
+- 探测并发直接用配置值。原先 `MaxDegreeOfParallelism` 写死 16、再进闸门抢 1~16 个槽位，多出来的任务全在闸门里空转。
+- `ConcurrencyGate` 重写：`SemaphoreSlim` 当自动重置事件用会在无人等待时累加许可，之后的并发进入会把大批等待者瞬间唤醒再全部折回（惊群 + `Task.Yield` 自旋）。改为等待队列 + 单次唤醒，被唤醒者重新竞争名额，不做许可累积。
+- 缓存溢出改为按最旧时间淘汰一批，不再 `Clear()` 全清（一次清空会让后续探测把远端 HEAD 请求重新打满）。
+- 每个取源请求的详细日志从 Information 降到 Debug，避免播放/进度上报路径把日志文件写爆。
+
+### 修复
+
+- `.strm` 集合缓存随条目增删失效。原先缓存 5 分钟内不失效，删除的条目仍会被探测流程执行 `UpdateItemAsync`。
+- `_strmItems` 与它的时间戳改为打包在同一个不可变快照里发布，避免读到「新时间戳 + 旧列表」。
+- 服务器忽略 `Range` 直接返回 200 时，额外排除 `text/*` 与 `application/json`，避免把错误页字节数当成视频大小。
+- 注入自定义 `HttpMessageHandler` 的 `RemoteSizeService` 现在会释放自己创建的 `HttpClient`。
+- `MediaSourceInterceptor` 恢复可空引用检查（去掉文件级 `#nullable disable`）。
+- 播放进度日志改为描述实际行为：无时长的 `.strm` 只更新内存中的续播点，不会立即落库（这是为了避免退出时被误标为已观看）。
+
+### 变更
+
+- `RemoteSizeService.ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处，`TryReadRemoteUrl` 增加返回文件长度的重载。
+
+### 验证
+
+- `dotnet build -c Release` 0 警告 0 错误。
+- xunit 全量用例 121 条通过（本机 VSTest 无法启动 testhost，改用反射直接调用用例；新增断言覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
+
+---
+
 ## [3.7.2] - 2026-11-21
 
 ### 修复
