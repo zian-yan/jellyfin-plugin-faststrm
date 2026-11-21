@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.7.2] - 2026-11-21
+
+### 修复
+
+- 给 OpenList/AList 加上签名直链后，未探测的 `.strm` 首次播放必然失败。Jellyfin 会把 `.strm` 的地址缓存在 `item.ShortcutPath`，手动改文件内容（加 `?sign=`）后该字段仍是旧 URL，只有后台探测触发元数据刷新才会重读，所以「第一次播不了、探测完才能播」。现在插件的取源路径直接读 `.strm` 的当前内容，把媒体源的 `Path` 改写成最新 URL（`Protocol=Http`、`IsRemote=true`），不再依赖可能过期的 `ShortcutPath`。
+- 同时修正容器名：Jellyfin 对 `.strm` 会推断出 `Container = "strm"`，客户端不认识这个容器。现在按 URL 的真实扩展名改成 `mkv` / `mp4` / `ts` / `iso` 等。
+
+### 验证
+
+- 断言覆盖：带 `?sign=...=:0` 的 URL 能正确写回 `Path`、`Protocol`、`IsRemote`、`Container`；`.iso?sign=` 得到 `iso`；`.strm` 内是本地路径或文件不存在时保持原状且不抛异常。
+- 构建 0 警告 0 错误；新增 `ApplyShortcutTarget_UsesTheFreshSignedUrlFromTheStrmFile` 与反例用例。
+
+---
+
 ## [3.7.1] - 2026-11-21
 
 ### 修复

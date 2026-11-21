@@ -37,7 +37,8 @@ internal static class StrmItem
             return cached;
         }
 
-        var unsupported = HasProbeUnsupportedExtension(path) || HasProbeUnsupportedRemoteTarget(path);
+        var unsupported = HasProbeUnsupportedExtension(path)
+                          || (TryReadRemoteUrl(path, out var url) && IsProbeUnsupportedTarget(url));
 
         if (ProbeSupport.Count >= MaxProbeSupportEntries)
         {
@@ -48,14 +49,15 @@ internal static class StrmItem
         return unsupported;
     }
 
-    private static bool HasProbeUnsupportedExtension(string path)
+    public static bool TryReadRemoteUrl(string? path, out string url)
     {
-        var name = path[..^StrmSuffix.Length];
-        return name.EndsWith(ProbeUnsupportedExtension, StringComparison.OrdinalIgnoreCase);
-    }
+        url = string.Empty;
 
-    private static bool HasProbeUnsupportedRemoteTarget(string path)
-    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return false;
+        }
+
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -75,9 +77,14 @@ internal static class StrmItem
                     continue;
                 }
 
-                return Uri.TryCreate(line, UriKind.Absolute, out var uri)
-                       && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
-                       && uri.AbsolutePath.EndsWith(ProbeUnsupportedExtension, StringComparison.OrdinalIgnoreCase);
+                if (Uri.TryCreate(line, UriKind.Absolute, out var uri)
+                    && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    url = line;
+                    return true;
+                }
+
+                return false;
             }
         }
         catch (Exception)
@@ -85,5 +92,26 @@ internal static class StrmItem
         }
 
         return false;
+    }
+
+    public static string? GetRemoteContainer(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(uri.AbsolutePath);
+        return extension.Length > 1 ? extension[1..].ToLowerInvariant() : null;
+    }
+
+    private static bool IsProbeUnsupportedTarget(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && uri.AbsolutePath.EndsWith(ProbeUnsupportedExtension, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasProbeUnsupportedExtension(string path)
+    {
+        var name = path[..^StrmSuffix.Length];
+        return name.EndsWith(ProbeUnsupportedExtension, StringComparison.OrdinalIgnoreCase);
     }
 }

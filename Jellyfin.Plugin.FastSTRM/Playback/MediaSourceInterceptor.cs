@@ -109,6 +109,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
                 .ConfigureAwait(false);
 
+            ApplyShortcutTarget(item, readySources);
+
             LogAccelerationSucceeded(item);
             return (readySources, "ready");
         }
@@ -144,6 +146,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var sources = await _inner.GetPlaybackMediaSources(
             item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
             .ConfigureAwait(false);
+
+        ApplyShortcutTarget(item, sources);
 
         int? backgroundProbeDelaySeconds = null;
         if (ProbeService.ShouldHandlePlaybackProbe(item, policy, out _))
@@ -300,6 +304,39 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     internal static bool IsPlaybackReady(BaseItem item)
         => StrmItem.HasStreamInfo(item) && !RemoteSizeService.IsRemoteSizeMissing(item);
 
+    internal static void ApplyShortcutTarget(BaseItem item, IReadOnlyList<MediaSourceInfo> sources)
+    {
+        if (sources is null || sources.Count == 0)
+        {
+            return;
+        }
+
+        if (!StrmItem.TryReadRemoteUrl(item.Path, out var url))
+        {
+            return;
+        }
+
+        var container = StrmItem.GetRemoteContainer(url);
+
+        for (var i = 0; i < sources.Count; i++)
+        {
+            var source = sources[i];
+
+            if (!string.Equals(source.Path, url, StringComparison.Ordinal))
+            {
+                source.Path = url;
+            }
+
+            source.Protocol = MediaProtocol.Http;
+            source.IsRemote = true;
+
+            if (container is not null && !string.Equals(source.Container, container, StringComparison.Ordinal))
+            {
+                source.Container = container;
+            }
+        }
+    }
+
     private void WarnIfStreamInfoMissing(
         BaseItem item,
         bool hasStreamInfo,
@@ -378,6 +415,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         if (StrmItem.IsStrm(item))
         {
+            ApplyShortcutTarget(item, sources);
             _remoteSize.ApplySizeToSources(item, sources);
         }
 
