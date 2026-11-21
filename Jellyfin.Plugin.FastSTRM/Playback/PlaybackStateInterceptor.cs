@@ -90,6 +90,12 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
             && item.SupportsPositionTicksResume
             && !hasRuntime)
         {
+            // 只更新内存里的续播点，不让 Jellyfin 自己算进度。
+            //
+            // 这里刻意不转交 _inner.UpdatePlayState：RunTimeTicks 为 null 时它算不出进度百分比，
+            // 播放结束时会把条目标成「已观看」（3.5.x 修过这个 bug）。代价是本次进度不会立刻落库，
+            // 只留在当前会话的内存对象里，等这条 .strm 探测出时长后的下一次保存才写得进去。
+            // 下面的日志按这个实际行为描述，不要写成「已保存」。
             data.PlaybackPositionTicks = reportedPositionTicks.Value;
 
             var playingUserId = ResolvePlayingUserId(item);
@@ -107,14 +113,17 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
                 if (backgroundProbeDelaySeconds.HasValue)
                 {
                     _logger.LogInformation(
-                        "FastSTRM: Preserving playback position {Position} for {Name} because its duration is not known yet; probing in background so completion can be tracked",
+                        "FastSTRM: Keeping playback position {Position} in memory for {Name} because its duration is not known yet; "
+                        + "a background probe in {Delay}s fills in the duration, after which progress is saved normally",
                         reportedPositionTicks.Value,
-                        LogSafe.Name(item));
+                        LogSafe.Name(item),
+                        backgroundProbeDelaySeconds.Value);
                 }
                 else
                 {
                     _logger.LogInformation(
-                        "FastSTRM: Preserving playback position {Position} for {Name} because its duration is not known yet; no background probe is scheduled for this playback, so completion cannot be tracked until a probe runs",
+                        "FastSTRM: Keeping playback position {Position} in memory for {Name} because its duration is not known yet; "
+                        + "no background probe is scheduled for this playback, so the position is not persisted and completion stays untracked until a probe runs",
                         reportedPositionTicks.Value,
                         LogSafe.Name(item));
                 }

@@ -309,11 +309,11 @@ public class RemoteSizeHttpTests
         var path = WriteStrm("http://93.184.216.34/movie.iso\n");
         try
         {
-            var item = new Video { Path = path, Size = new FileInfo(path).Length };
-
-            await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+            // 补全后 item.Size 就是远端大小，第二次 Ensure 会直接短路；
+            // 这里换一个实例（仍在「缺大小」状态）来验证缓存本身被清掉了。
+            await service.EnsureRemoteSizeAsync(new Video { Path = path, Size = new FileInfo(path).Length }, CancellationToken.None);
             service.ClearCache();
-            await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+            await service.EnsureRemoteSizeAsync(new Video { Path = path, Size = new FileInfo(path).Length }, CancellationToken.None);
 
             Assert.Equal(2, handler.Requests.Count);
         }
