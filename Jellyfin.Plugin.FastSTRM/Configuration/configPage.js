@@ -363,6 +363,7 @@ export default function (view) {
     var btnAddUserPolicy = view.querySelector('#btnAddUserPolicy');
 
     var pollTimer = null;
+    var summaryRetryTimer = null;
     var visible = false;
     var clearRequested = false;
 
@@ -666,6 +667,15 @@ export default function (view) {
             lblSizeMissing.textContent = data.SizeMissing === undefined || data.SizeMissing === null
                 ? '-'
                 : data.SizeMissing;
+
+            // 服务端改成后台异步统计：拿到全 0 说明还没算完，稍后再取一次，
+            // 否则新装/重启后第一次打开会一直显示 0。
+            if (!forceRefresh && data.Total === 0 && !summaryRetryTimer) {
+                summaryRetryTimer = setTimeout(function () {
+                    summaryRetryTimer = null;
+                    loadSummary();
+                }, 1500);
+            }
         }).catch(function () {
         });
     }
@@ -689,7 +699,16 @@ export default function (view) {
                 btnStop.style.display = 'none';
                 btnClearStreamInfo.disabled = false;
                 stopPolling();
+
+                // 统计已改为服务端异步计算：先触发刷新，再补取一次结果，
+                // 否则探测刚结束时读到的还是旧快照。
                 loadSummary(true);
+                if (!summaryRetryTimer) {
+                    summaryRetryTimer = setTimeout(function () {
+                        summaryRetryTimer = null;
+                        loadSummary();
+                    }, 1200);
+                }
 
                 if (clearRequested) {
                     clearRequested = false;
@@ -705,7 +724,9 @@ export default function (view) {
             txtProbeConcurrency.value = clampConcurrency(config.MaxConcurrentProbes);
             txtRemoteSizeTimeout.value = clampRemoteSizeTimeout(config.RemoteSizeTimeoutSeconds);
             if (chkAllowPrivateNetworkTargets) {
-                chkAllowPrivateNetworkTargets.checked = config.AllowPrivateNetworkTargets !== false;
+                // 默认是「不允许」（false）。只有显式存过 true 才勾选，
+                // 老版本遗留的空值不能再被当成 true。
+                chkAllowPrivateNetworkTargets.checked = config.AllowPrivateNetworkTargets === true;
             }
             chkSkipProbeForUnprobed.checked = config.SkipProbeForUnprobedStrm !== false;
             selectUnprobedPlaybackMode.value = config.EnableBackgroundProbeForUnprobedStrm === true
@@ -859,5 +880,10 @@ export default function (view) {
     view.addEventListener('viewhide', function () {
         visible = false;
         stopPolling();
+
+        if (summaryRetryTimer) {
+            clearTimeout(summaryRetryTimer);
+            summaryRetryTimer = null;
+        }
     });
 }

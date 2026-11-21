@@ -50,7 +50,9 @@ internal static class StreamTargetPolicy
 
         if (bytes[0] == 0
             || bytes[0] >= 224
-            || (bytes[0] == 169 && bytes[1] == 254))
+            || (bytes[0] == 169 && bytes[1] == 254)   // 链路本地，含云主机元数据 169.254.169.254
+            || (bytes[0] == 198 && (bytes[1] == 18 || bytes[1] == 19))  // 198.18.0.0/15 基准测试网段
+            || (bytes[0] == 192 && bytes[1] == 0 && bytes[2] == 0))     // 192.0.0.0/24 IETF 协议保留
         {
             return false;
         }

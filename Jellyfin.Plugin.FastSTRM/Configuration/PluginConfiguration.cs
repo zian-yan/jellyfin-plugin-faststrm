@@ -28,7 +28,11 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public const bool DefaultCancelBackgroundProbeOnPlaybackStop = true;
 
-    public const bool DefaultAllowPrivateNetworkTargets = true;
+    /// <summary>
+    /// 默认不允许请求内网地址。.strm 内容完全由外部提供，默认开启会把插件变成
+    /// 内网探测跳板；局域网媒体服务器需要用户显式打开该开关。
+    /// </summary>
+    public const bool DefaultAllowPrivateNetworkTargets = false;
 
     public bool EnableAutoProbe { get; set; }
 

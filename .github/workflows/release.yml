@@ -32,10 +32,13 @@ jobs:
 
       - name: Resolve and Verify Version
         id: version
+        env:
+          # 通过环境变量传入，避免把 workflow_dispatch 的输入直接拼进 shell 脚本（脚本注入）。
+          RAW_TAG_INPUT: ${{ github.event.inputs.tag_name || github.ref_name }}
         run: |
           set -e
 
-          RAW_TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          RAW_TAG="${RAW_TAG_INPUT}"
 
           # 标签统一带 v 前缀，容错补上前缀
           TAG_NAME="${RAW_TAG#v}"
