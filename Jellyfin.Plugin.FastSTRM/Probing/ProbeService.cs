@@ -85,9 +85,13 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private volatile SummarySnapshot? _summaryCache;
 
-    private volatile IReadOnlyList<BaseItem>? _strmItems;
+    /// <summary>
+    /// 条目集合快照。列表与它的时间戳打包在同一个不可变对象里一起发布，
+    /// 避免「新的时间戳 + 旧的列表」被读成新鲜数据。
+    /// </summary>
+    private volatile StrmItemSnapshot? _strmItems;
 
-    private long _strmItemsUtcTicks;
+    private volatile bool _strmItemsDirty;
 
     private int _summaryRefreshRunning;
 
@@ -152,8 +156,15 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _libraryManager.ItemAdded -= OnItemAdded;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
+        _libraryManager.ItemAdded -= OnLibraryChanged;
+        _libraryManager.ItemRemoved -= OnLibraryChanged;
         _libraryManager.ItemAdded += OnItemAdded;
         _sessionManager.PlaybackStopped += OnPlaybackStopped;
+        _libraryManager.ItemAdded += OnLibraryChanged;
+        _libraryManager.ItemRemoved += OnLibraryChanged;
+
+        // 启动后先把全库统计丢到后台算一遍，配置页第一次打开时就不会看到空数据。
+        QueueSummaryRefresh();
         return Task.CompletedTask;
     }
 
@@ -163,6 +174,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _libraryManager.ItemAdded -= OnItemAdded;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
+        _libraryManager.ItemAdded -= OnLibraryChanged;
+        _libraryManager.ItemRemoved -= OnLibraryChanged;
 
         CancelQuietly(_shutdownCts, "FastSTRM: Error while cancelling pending background probes");
 
@@ -270,6 +283,13 @@ public sealed class ProbeService : IHostedService, IDisposable
             _logger.LogDebug(ex, "FastSTRM: Unable to schedule the auto-probe for {Name}", LogSafe.Name(item, LogSafe.MaxLoggedLength));
         }
     }
+
+    /// <summary>
+    /// 条目增删会改变 .strm 集合，缓存列表必须作废。只置脏标记而不直接清空：
+    /// 库扫描期间会连续触发成千上万次，每次都重新查库等于自我 DDoS。
+    /// 条目内容更新不需要处理 —— 列表里存的是共享引用，改动本身就可见。
+    /// </summary>
+    private void OnLibraryChanged(object? sender, ItemChangeEventArgs e) => _strmItemsDirty = true;
 
     internal static bool ShouldHandleNewItem(BaseItem item, bool autoProbeEnabled, out bool runFullProbe)
     {
@@ -460,17 +480,21 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         var cached = _summaryCache;
 
-        if (cached is not null && !forceRefresh)
+        // 这个接口绝不能同步做全库统计：一次无 Limit 的 GetItemList 加上逐条 stat，
+        // 十万条目就是十万次系统调用，放在 HTTP 请求线程上配置页会直接超时。
+        // 缓存缺失或需要刷新时，先返回手里的快照并把计算丢到后台。
+        if (cached is null || forceRefresh)
         {
-            if (!IsFresh(cached.UtcTicks, DateTime.UtcNow.Ticks, SummaryCacheTtl))
-            {
-                QueueSummaryRefresh();
-            }
-
-            return cached.ToTuple();
+            QueueSummaryRefresh();
+            return cached?.ToTuple() ?? default;
         }
 
-        return ComputeSummary().ToTuple();
+        if (!IsFresh(cached.UtcTicks, DateTime.UtcNow.Ticks, SummaryCacheTtl))
+        {
+            QueueSummaryRefresh();
+        }
+
+        return cached.ToTuple();
     }
 
     private SummarySnapshot ComputeSummary()
@@ -991,7 +1015,9 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             var options = new ParallelOptions
             {
-                MaxDegreeOfParallelism = PluginConfiguration.MaxConcurrentProbesLimit,
+                // 直接用配置的并发数。之前写死 16 再在循环体内抢 _probeGate 的槽位，
+                // 等于先开 16 个任务再把多出来的全部堵在闸门里空转。
+                MaxDegreeOfParallelism = GetConfiguredProbeLimit(),
                 CancellationToken = ct
             };
 
@@ -1167,9 +1193,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             var cached = _strmItems;
             if (cached is not null
-                && IsFresh(Volatile.Read(ref _strmItemsUtcTicks), DateTime.UtcNow.Ticks, StrmListCacheTtl))
+                && !_strmItemsDirty
+                && IsFresh(cached.UtcTicks, DateTime.UtcNow.Ticks, StrmListCacheTtl))
             {
-                return cached;
+                return cached.Items;
             }
         }
 
@@ -1182,8 +1209,8 @@ public sealed class ProbeService : IHostedService, IDisposable
             .Where(StrmItem.IsStrm)
             .ToList();
 
-        _strmItems = items;
-        Volatile.Write(ref _strmItemsUtcTicks, DateTime.UtcNow.Ticks);
+        _strmItems = new StrmItemSnapshot(items, DateTime.UtcNow.Ticks);
+        _strmItemsDirty = false;
         return items;
     }
 
@@ -1310,6 +1337,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _shutdownCts?.Dispose();
     }
+
+    private sealed record StrmItemSnapshot(IReadOnlyList<BaseItem> Items, long UtcTicks);
 
     private sealed record SummarySnapshot(int Total, int Probed, int Unprobed, int SizeMissing, long UtcTicks)
     {

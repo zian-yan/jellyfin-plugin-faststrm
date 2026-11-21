@@ -1,5 +1,3 @@
-#nullable disable
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -169,18 +167,22 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         long gapMs,
         string branch,
         bool allowMediaProbe,
-        IReadOnlyList<MediaSourceInfo> sources,
+        IReadOnlyList<MediaSourceInfo>? sources,
         TimeSpan elapsed)
     {
-        var sourceCount = sources?.Count ?? 0;
+        var sourceCount = 0;
         var streamCount = 0;
 
-        for (var i = 0; i < sourceCount; i++)
+        if (sources is not null)
         {
-            streamCount += sources[i].MediaStreams?.Count ?? 0;
+            sourceCount = sources.Count;
+            for (var i = 0; i < sourceCount; i++)
+            {
+                streamCount += sources[i].MediaStreams?.Count ?? 0;
+            }
         }
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "FastSTRM: 取源 #{Call} {Name} | 距上次 {Gap}ms | 分支 {Branch} | allowMediaProbe={AllowProbe} | RunTimeTicks={RuntimeTicks} | Size={Size} | strm={StrmBytes}B | 源={SourceCount} 流={StreamCount} | 耗时 {Elapsed}ms | item={ItemId}",
             call,
             LogSafe.Name(item),
@@ -238,14 +240,13 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
     private static long? ReadStrmLength(BaseItem item)
     {
-        try
-        {
-            return string.IsNullOrEmpty(item.Path) ? null : new FileInfo(item.Path).Length;
-        }
-        catch (Exception)
+        // 走 StrmItem 的长度缓存，不再为每条日志单独做一次 stat。
+        if (string.IsNullOrEmpty(item.Path) || !StrmItem.TryGetLength(item.Path, out var length))
         {
             return null;
         }
+
+        return length;
     }
 
     private static string ShortId(Guid itemId)
@@ -255,7 +256,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     {
         if (ShouldLogAcceleration(item.Id))
         {
-            _logger.LogInformation("FastSTRM: 加速成功");
+            _logger.LogDebug("FastSTRM: 加速成功");
         }
     }
 
@@ -409,7 +410,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     public IReadOnlyList<MediaAttachment> GetMediaAttachments(MediaAttachmentQuery query)
         => _inner.GetMediaAttachments(query);
 
-    public IReadOnlyList<MediaSourceInfo> GetStaticMediaSources(BaseItem item, bool enablePathSubstitution, User user = null)
+    public IReadOnlyList<MediaSourceInfo> GetStaticMediaSources(BaseItem item, bool enablePathSubstitution, User? user = null)
     {
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
 
