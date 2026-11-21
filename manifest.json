@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.6.8.0",
+        "changelog": "### 修复\n\n- 首次播放不再把 `.strm` 文本文件自身的字节数当成媒体大小下发给客户端。此前未补全远端大小的条目会带着 `Size=256`（`.strm` 文本长度）起播，播放器按几百字节解码，立刻到达文件末尾，表现为「第一次点播放报错或秒退，等后台把远端大小写回后才正常」。现在大小不可信时下发 `null`，客户端按未知长度的流处理；已补全或缓存过的真实大小仍照常下发。\n\n### 变更\n\n- `RemoteSizeService.ApplyCachedSizeToSources` 更名为 `ApplySizeToSources`，除应用缓存值外，还会剔除不可信的 `.strm` 文件长度，静态源与播放取源两条路径同步生效。\n- `.iso` 光盘镜像的 `.strm` 不再参与 ffprobe：入库自动探测、起播后补探测、手动全量/增量探测，以及 `OfficialProbe` 策略下的官方探测全部跳过，只解析远端大小。此前这类条目每次探测都以 `ffprobe failed - streams and format are both null` / `Input/output error` 收尾，并在起播后 10s、30s 重试；现在不发起探测，也不再重试和报错，起播时的提示降为 Info。\n\n### 验证\n\n- 构建 0 警告 0 错误；新增 `StrmItemTests` 覆盖 `.iso` 的两种判定方式（文件名、`.strm` 内 URL，含带 query 的情况）与普通视频反例。\n- 取源与探测分支断言通过：iso 条目 `runFullProbe=False`、仍会补远端大小、命中秒开路径而非 `official-probe`。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.6.8/FastSTRM.zip",
+        "checksum": "f8a096ad3bbdc35dcdf51c479235f0ab",
+        "timestamp": "2026-11-21T08:50:20Z"
+      },
+      {
         "version": "3.6.7.0",
         "changelog": "### 新增\n\n- 播放取源诊断日志：每次 `PlaybackInfo` 输出一行 Info，包含该条目的第几次取源、距上次毫秒数、命中分支（`ready` / `skip-probe` / `instant-no-probe` / `official-probe`）、`allowMediaProbe`、`RunTimeTicks`、`Size`、`.strm` 文件字节数、返回的源/流数量与本次耗时，用于判断一次起播究竟触发了几次取源、每次差在哪里。仅 `.strm` 条目输出，非 `.strm` 仍完全透传且不产生日志。\n\n### 变更\n\n- 代码瘦身（纯内部重构，功能与行为不变）：C# 源码 6573 → 4830 行；插件本体 5122 → 3507 行（-31.5%）。\n- 新增 `Common/StrmItem.cs`，统一「是否 .strm」「是否已有流信息」判定，替换 4 个文件里各自重复的私有实现。\n- 新增 `Common/MarkerSet.cs`，统一「有界去重标记集」，替换播放策略解析与两个拦截器中各写一遍的「字典 + 计数器 + 满即清空」样板。\n- `ConcurrencyGate.AcquireAsync` 返回可 `using` 的 `Lease`，调用点不再手写名额获取与释放。\n- `LogSafe.Sanitize` 收敛控制字符中和与长度截断，原先在日志、URL、策略三处各写一份。\n- 播放策略派生改用 `with` 表达式；`Snapshot`、`SummarySnapshot`、`CachedSize` 改为 record。\n- 删除全部源码注释（含配置页 HTML/JS 与 CSS 注释），配置页脚本 840 → 786 行。\n\n### 验证\n\n- 构建 0 警告 0 错误；105 个单元测试全部通过，与重构前基线一致。\n- 取源诊断日志经独立宿主实测：`ready` 与 `skip-probe` 两条分支的取源序号、距上次间隔、源/流计数与耗时输出正确。\n\n---",
         "targetAbi": "12.0.0.0",
