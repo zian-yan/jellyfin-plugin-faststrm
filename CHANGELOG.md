@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.7.1] - 2026-11-21
+
+### 修复
+
+- 3.7.0 的「取源前按需解析远端大小」实际没有生效：当库里的 `item.Size` 是旧的 `.strm` 文本长度、且与当前文件长度不一致时，`IsAlreadyResolved` 会把它误判成「已补全的小文件」，`EnsureRemoteSizeAsync` 直接返回旧值，一次请求都没发（日志表现为取源耗时只有 20ms 上下、`Size` 始终是 296）。现在这条兜底路径绕过该判定，直接查询远端大小并写库、写缓存，首次播放就能拿到真实大小。
+- 影响：无流 `.strm` 首次播放仍会带着几百字节的 `Size` 起播，部分播放器（SenPlayer）按该长度取流后会立刻结束，表现为「无流播不了、等后台探测补全后才能播」。
+
+### 验证
+
+- 复现日志中的状态（`Size=296`、`.strm` 实际 348 字节）后断言：取源前发出 1 次请求、拿到真实大小、回填到媒体源、第二次命中缓存不再请求。
+- 构建 0 警告 0 错误；新增 `EnsureRemoteSize_IgnoresTheStaleStrmLengthShortcut` 回归用例。
+
+---
+
 ## [3.7.0] - 2026-11-21
 
 ### 新增

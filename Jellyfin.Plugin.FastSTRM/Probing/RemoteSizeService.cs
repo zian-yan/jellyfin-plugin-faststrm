@@ -202,12 +202,36 @@ public sealed class RemoteSizeService : IDisposable
             return item.Size;
         }
 
+        var url = ReadRemoteUrl(item.Path, out _);
+        if (url is null)
+        {
+            return null;
+        }
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(PlaybackSizeLookupTimeout);
 
         try
         {
-            return await ResolveAsync(item, RemoteSizeTrigger.PlaybackProbe, timeoutCts.Token).ConfigureAwait(false);
+            long? size;
+            using (await _gate.AcquireAsync(timeoutCts.Token).ConfigureAwait(false))
+            {
+                (size, _) = await QueryRemoteSizeWithDiagnosticsAsync(url, timeoutCts.Token).ConfigureAwait(false);
+            }
+
+            if (size is null)
+            {
+                _logger.LogDebug(
+                    "FastSTRM: Could not resolve the remote size of {Name} before playback; keeping the stored size",
+                    LogSafe.Name(item));
+                return null;
+            }
+
+            Remember(item.Id, size.Value);
+            RememberUrl(url, size.Value);
+
+            await PersistAsync(item, size.Value, timeoutCts.Token, force: false).ConfigureAwait(false);
+            return size;
         }
         catch (OperationCanceledException)
         {

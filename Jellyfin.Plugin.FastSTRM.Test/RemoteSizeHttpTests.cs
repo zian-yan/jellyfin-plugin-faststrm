@@ -324,6 +324,27 @@ public class RemoteSizeHttpTests
     }
 
     [Fact]
+    public async Task EnsureRemoteSize_IgnoresTheStaleStrmLengthShortcut()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.mkv\n");
+        try
+        {
+            var item = new Video { Path = path, Size = 296 };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Equal(EightMegabytes, size);
+            Assert.Single(handler.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task EnsureRemoteSize_LeavesTheStoredSizeWhenTheEndpointRejectsTheLookup()
     {
         var handler = new StubHandler(_ => Json(HttpStatusCode.MethodNotAllowed, 0));
