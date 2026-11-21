@@ -34,6 +34,8 @@ public sealed class RemoteSizeService : IDisposable
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
 
+    private static readonly TimeSpan PlaybackSizeLookupTimeout = TimeSpan.FromSeconds(2);
+
     private static readonly TimeSpan ForceReuseWindow = TimeSpan.FromMinutes(5);
 
     private static readonly HttpClient SharedHttpClient = CreateHttpClient();
@@ -149,6 +151,22 @@ public sealed class RemoteSizeService : IDisposable
         return cached.Size;
     }
 
+    public void Forget(Guid itemId)
+    {
+        if (itemId == Guid.Empty)
+        {
+            return;
+        }
+
+        _itemSizes.TryRemove(itemId, out _);
+    }
+
+    public void ClearCache()
+    {
+        _itemSizes.Clear();
+        _urlSizes.Clear();
+    }
+
     public void ApplySizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
         if (sources is null || sources.Count == 0)
@@ -157,6 +175,10 @@ public sealed class RemoteSizeService : IDisposable
         }
 
         var size = ResolveSizeToPublish(item);
+        if (size is null)
+        {
+            return;
+        }
 
         foreach (var source in sources)
         {
@@ -164,6 +186,41 @@ public sealed class RemoteSizeService : IDisposable
             {
                 source.Size = size;
             }
+        }
+    }
+
+    public async Task<long?> EnsureRemoteSizeAsync(BaseItem item, CancellationToken cancellationToken)
+    {
+        var cached = TryGetCachedSize(item.Id);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        if (!StrmItem.IsStrm(item) || !NeedsRemoteSize(item))
+        {
+            return item.Size;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(PlaybackSizeLookupTimeout);
+
+        try
+        {
+            return await ResolveAsync(item, RemoteSizeTrigger.PlaybackProbe, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug(
+                "FastSTRM: The playback-time size lookup for {Name} was cancelled after {Timeout}ms",
+                LogSafe.Name(item),
+                (int)PlaybackSizeLookupTimeout.TotalMilliseconds);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "FastSTRM: The playback-time size lookup for {Name} failed", LogSafe.Name(item));
+            return null;
         }
     }
 

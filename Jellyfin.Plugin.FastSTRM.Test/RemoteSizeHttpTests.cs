@@ -239,7 +239,7 @@ public class RemoteSizeHttpTests
     }
 
     [Fact]
-    public void CachedSizeOnly_NeverTriggersALookupOnCacheMiss()
+    public void ApplySizeToSources_NeverTriggersALookupOnItsOwn()
     {
         var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
         using var service = CreateService(handler);
@@ -249,11 +249,11 @@ public class RemoteSizeHttpTests
         service.ApplySizeToSources(item, sources);
 
         Assert.Empty(handler.Requests);
-        Assert.Null(sources[0].Size);
+        Assert.Equal(180, sources[0].Size);
     }
 
     [Fact]
-    public void ApplySizeToSources_HidesTheStrmFileLengthWhenRemoteSizeIsUnknown()
+    public void ApplySizeToSources_KeepsTheSourceSizeWhenRemoteSizeIsUnknown()
     {
         var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
         using var service = CreateService(handler);
@@ -265,7 +265,81 @@ public class RemoteSizeHttpTests
 
             service.ApplySizeToSources(item, sources);
 
-            Assert.All(sources, source => Assert.Null(source.Size));
+            Assert.All(sources, source => Assert.Equal(item.Size, source.Size));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureRemoteSize_ResolvesOnDemandAndReusesTheCache()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Equal(EightMegabytes, size);
+            Assert.Single(handler.Requests);
+
+            var sources = new List<MediaSourceInfo> { new() { Size = item.Size } };
+            service.ApplySizeToSources(item, sources);
+            Assert.Equal(EightMegabytes, sources[0].Size);
+
+            Assert.Equal(EightMegabytes, await service.EnsureRemoteSizeAsync(item, CancellationToken.None));
+            Assert.Single(handler.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ClearCache_ForcesAFreshLookup()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+
+            await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+            service.ClearCache();
+            await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Equal(2, handler.Requests.Count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureRemoteSize_LeavesTheStoredSizeWhenTheEndpointRejectsTheLookup()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.MethodNotAllowed, 0));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Null(size);
+
+            var sources = new List<MediaSourceInfo> { new() { Size = item.Size } };
+            service.ApplySizeToSources(item, sources);
+            Assert.Equal(item.Size, sources[0].Size);
         }
         finally
         {

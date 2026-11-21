@@ -12,8 +12,10 @@ using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -44,6 +46,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     public const string FullMode = "Full";
 
+    public const string ClearingState = "Clearing";
+
     private static readonly TimeSpan PlaybackProbeRetryInterval = TimeSpan.FromMinutes(10);
 
     private static readonly TimeSpan[] PlaybackProbeRetryDelays =
@@ -55,6 +59,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly IDirectoryService _directoryService;
     private readonly ISessionManager _sessionManager;
+    private readonly IMediaStreamRepository _mediaStreams;
     private readonly RemoteSizeService _remoteSize;
     private readonly ILogger<ProbeService> _logger;
 
@@ -102,12 +107,14 @@ public sealed class ProbeService : IHostedService, IDisposable
         ILibraryManager libraryManager,
         IDirectoryService directoryService,
         ISessionManager sessionManager,
+        IMediaStreamRepository mediaStreams,
         RemoteSizeService remoteSize,
         ILogger<ProbeService> logger)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _sessionManager = sessionManager;
+        _mediaStreams = mediaStreams;
         _remoteSize = remoteSize;
         _logger = logger;
     }
@@ -575,11 +582,167 @@ public sealed class ProbeService : IHostedService, IDisposable
         return true;
     }
 
+    public bool StartClearStreamInfo()
+    {
+        CancellationTokenSource cts;
+        int generation;
+        lock (_lock)
+        {
+            if (State != "Idle")
+            {
+                return false;
+            }
+
+            State = ClearingState;
+            Volatile.Write(ref _totalItems, 0);
+            Volatile.Write(ref _processedItems, 0);
+            CurrentItemName = string.Empty;
+
+            cts = new CancellationTokenSource();
+            _cts = cts;
+            generation = ++_probeGeneration;
+        }
+
+        Task clearTask;
+        try
+        {
+            clearTask = Task.Run(() => RunClearStreamInfoAsync(cts, generation));
+        }
+        catch (Exception ex)
+        {
+            lock (_lock)
+            {
+                if (generation == _probeGeneration)
+                {
+                    State = "Idle";
+                    _cts = null;
+                    _probeTask = null;
+                }
+            }
+
+            cts.Dispose();
+            _logger.LogError(ex, "FastSTRM: Unable to start the stream-info cleanup");
+            return false;
+        }
+
+        lock (_lock)
+        {
+            if (generation == _probeGeneration)
+            {
+                _probeTask = clearTask.IsCompleted ? null : clearTask;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task RunClearStreamInfoAsync(CancellationTokenSource cts, int generation)
+    {
+        var ct = cts.Token;
+
+        try
+        {
+            var items = GetStrmItems(forceRefresh: true);
+            var total = items.Count;
+
+            lock (_lock)
+            {
+                if (generation == _probeGeneration)
+                {
+                    Volatile.Write(ref _totalItems, total);
+                }
+            }
+
+            var index = 0;
+            var cleared = 0;
+            Volatile.Write(ref _lastProgressLogTicks, 0);
+
+            _remoteSize.ClearCache();
+
+            foreach (var item in items)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var name = LogSafe.Name(item, LogSafe.MaxDisplayedLength);
+                CurrentItemName = name;
+                LogProgress(Interlocked.Increment(ref index), total, name);
+
+                try
+                {
+                    _mediaStreams.SaveMediaStreams(item.Id, Array.Empty<MediaStream>(), ct);
+
+                    item.RunTimeTicks = null;
+                    item.Size = ReadStrmFileLength(item);
+
+                    await _libraryManager
+                        .UpdateItemAsync(item, item.GetParent(), ItemUpdateType.MetadataEdit, ct)
+                        .ConfigureAwait(false);
+
+                    _remoteSize.Forget(item.Id);
+                    cleared++;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "FastSTRM: Unable to clear the stream info of {Name}", name);
+                }
+
+                Interlocked.Increment(ref _processedItems);
+            }
+
+            _logger.LogInformation(
+                "FastSTRM: Cleared the stream info and stored size of {Cleared}/{Total} .strm item(s); "
+                + "run a probe to rebuild them",
+                cleared,
+                total);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("FastSTRM: Stream-info cleanup was cancelled");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "FastSTRM: Stream-info cleanup failed");
+        }
+        finally
+        {
+            _remoteSize.ClearCache();
+
+            lock (_lock)
+            {
+                if (generation == _probeGeneration)
+                {
+                    State = "Idle";
+                    CurrentItemName = string.Empty;
+                    _cts = null;
+                    _probeTask = null;
+                }
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private static long? ReadStrmFileLength(BaseItem item)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(item.Path) ? null : new FileInfo(item.Path).Length;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     public void StopProbe()
     {
         lock (_lock)
         {
-            if (State != "Running")
+            if (State != "Running" && State != ClearingState)
             {
                 return;
             }
