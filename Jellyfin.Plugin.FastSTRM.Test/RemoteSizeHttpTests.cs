@@ -274,6 +274,101 @@ public class RemoteSizeHttpTests
     }
 
     [Fact]
+    public async Task EnsureRemoteSize_ResolvesOnDemandAndReusesTheCache()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Equal(EightMegabytes, size);
+            Assert.Single(handler.Requests);
+
+            var sources = new List<MediaSourceInfo> { new() { Size = item.Size } };
+            service.ApplySizeToSources(item, sources);
+            Assert.Equal(EightMegabytes, sources[0].Size);
+
+            Assert.Equal(EightMegabytes, await service.EnsureRemoteSizeAsync(item, CancellationToken.None));
+            Assert.Single(handler.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ClearCache_ForcesAFreshLookup()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            // 补全后 item.Size 就是远端大小，第二次 Ensure 会直接短路；
+            // 这里换一个实例（仍在「缺大小」状态）来验证缓存本身被清掉了。
+            await service.EnsureRemoteSizeAsync(new Video { Path = path, Size = new FileInfo(path).Length }, CancellationToken.None);
+            service.ClearCache();
+            await service.EnsureRemoteSizeAsync(new Video { Path = path, Size = new FileInfo(path).Length }, CancellationToken.None);
+
+            Assert.Equal(2, handler.Requests.Count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureRemoteSize_IgnoresTheStaleStrmLengthShortcut()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.mkv\n");
+        try
+        {
+            var item = new Video { Path = path, Size = 296 };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Equal(EightMegabytes, size);
+            Assert.Single(handler.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureRemoteSize_LeavesTheStoredSizeWhenTheEndpointRejectsTheLookup()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.MethodNotAllowed, 0));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+
+            var size = await service.EnsureRemoteSizeAsync(item, CancellationToken.None);
+
+            Assert.Null(size);
+
+            var sources = new List<MediaSourceInfo> { new() { Size = item.Size } };
+            service.ApplySizeToSources(item, sources);
+            Assert.Equal(item.Size, sources[0].Size);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ApplySizeToSources_KeepsAPlausibleRemoteSize()
     {
         var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));

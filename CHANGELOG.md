@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.7.0] - 2026-11-21
 
+### 新增
+
+- 配置页新增「清除所有流信息」按钮（`POST /FastStrm/StreamInfo/Clear`，管理员权限）：清空全部 `.strm` 条目的媒体流（`media_streams`）、时长（`RunTimeTicks`）与已补全的文件大小，全部恢复到未探测状态，同时清空内存中的远端大小缓存。点击后先弹出一次警告确认，说明影响范围与不可撤销；任务在后台执行，复用现有进度条与状态显示（状态为「清除中」），可随时停止，与预探测互斥。
+
 ### 安全
 
 - **默认不再允许请求内网地址**（`AllowPrivateNetworkTargets` 默认值 `true` → `false`）。`.strm` 内容完全由外部提供（用户上传、共享库、他人投喂的媒体库），默认放行等于把插件变成内网探测跳板，可以打到 `127.0.0.1`、`10.0.0.0/8`、内网管理端口（Redis / Docker API / ES 等）。局域网媒体服务器需要在配置页显式勾选「允许请求内网地址」。已有的显式配置不受影响。
@@ -22,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 性能
 
 - 列表页不再逐条做磁盘 I/O。`GetStaticMediaSources` 会为每个 `.strm` 打开文件读首行并额外 `stat` 一次；现在结果按 `(path, 长度, 写入时间)` 缓存 5 秒，稳态下零系统调用，库在 SMB/NFS 上时列表页卡顿明显改善。
-- `IsRemoteSizeMissing` 复用 `StrmItem` 的长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
+- 起播路径不再同步写库。补全远端大小后的 `UpdateItemAsync` 移到后台，起播只更新内存字段；同时 `IsRemoteSizeMissing` 复用同一份长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
 - `/FastStrm/Summary` 不再在请求线程里做全库统计。原先缓存未命中会同步跑一次无 `Limit` 的 `GetItemList` + 逐条 `stat`，十万条目直接把请求拖超时；现在始终返回现有快照并在后台计算，插件启动时预热一次。
 - 探测并发直接用配置值。原先 `MaxDegreeOfParallelism` 写死 16、再进闸门抢 1~16 个槽位，多出来的任务全在闸门里空转。
 - `ConcurrencyGate` 重写：`SemaphoreSlim` 当自动重置事件用会在无人等待时累加许可，之后的并发进入会把大批等待者瞬间唤醒再全部折回（惊群 + `Task.Yield` 自旋）。改为等待队列 + 单次唤醒，被唤醒者重新竞争名额，不做许可累积。
@@ -39,16 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 注入自定义 `HttpMessageHandler` 的 `RemoteSizeService` 现在会释放自己创建的 `HttpClient`。
 - `MediaSourceInterceptor` 恢复可空引用检查（去掉文件级 `#nullable disable`）。
 - 播放进度日志改为描述实际行为：无时长的 `.strm` 只更新内存中的续播点，不会立即落库（这是为了避免退出时被误标为已观看）。
+- 3.6.8 把无法确认的媒体大小下发为 `null`，部分第三方播放器（如 SenPlayer）会据此直接放弃直连播放，客户端静默失败、服务端无任何日志。现在改为在取源前按需解析一次远端大小（`HEAD`/`Range`，2 秒上限，结果缓存 6 小时）：解析成功就下发真实大小并写库，失败则保留源自身的原值，不再下发 `null`。
+- 该解析只在大小不可信时触发；大小已补全或命中缓存的条目仍然零请求、零延迟。
+- 兜底路径不再走 `ResolveAsync` 的 `IsAlreadyResolved` 短路：库里的 `item.Size` 是旧 `.strm` 文本长度、且与当前文件长度不同时会被误判成「已补全的小文件」，导致一次请求都不发（日志里取源只有 20ms、`Size` 始终是 296）。现在直接查询远端大小并写库、写缓存，首次播放即可下发真实大小。
 
 ### 变更
 
+- 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把「播放路径上的大小兜底」与 `ApplySizeToSources` 的纯展示填充分开；后者在大小未知时不再改写入参。
 - `RemoteSizeService.ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处，`TryReadRemoteUrl` 增加返回文件长度的重载。
 
 ### 验证
 
 - 断言覆盖：带 `?sign=...=:0` 的 URL 能正确写回 `Path`、`Protocol`、`IsRemote`、`Container`；`.iso?sign=` 得到 `iso`；`.strm` 内是本地路径或文件不存在时保持原状且不抛异常。
+- 断言覆盖：取源大小兜底（按需解析 / 缓存复用 / 失败保留原值 / 非 `.strm` 不发请求 / 清缓存后重解析），以及清除流信息的完整流程（流信息传空列表、时长清空、大小回到 `.strm` 长度、`UpdateItemAsync` 触发、状态回到 `Idle`、可重复执行）。
 - 构建 0 警告 0 错误；`node --check` 与 HTML 标签配对检查通过。
-- xunit 全量用例通过（本机 VSTest 无法启动 testhost，改用反射直接调用 80 个 `[Fact]` 用例，0 失败；覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
+- xunit 全量用例通过（本机 VSTest 无法启动 testhost，改用反射直接调用 84 个 `[Fact]` 用例，0 失败；另覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
 
 ---
 

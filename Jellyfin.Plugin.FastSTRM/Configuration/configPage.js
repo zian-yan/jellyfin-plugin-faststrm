@@ -44,6 +44,41 @@ export default function (view) {
             zhHant: '停止',
             en: 'Stop'
         },
+        'probe.clear': {
+            zh: '清除所有流信息',
+            zhHant: '清除所有流資訊',
+            en: 'Clear all stream info'
+        },
+        'clear.title': {
+            zh: '清除所有流信息',
+            zhHant: '清除所有流資訊',
+            en: 'Clear all stream info'
+        },
+        'clear.warning': {
+            zh: '将清空全部 .strm 条目的流信息（时长、音轨、视频轨、分辨率）以及已补全的文件大小，全部恢复到未探测状态。播放与续播不受影响，但时长和轨道信息需要重新探测才能恢复。此操作不可撤销，确定继续吗？',
+            zhHant: '將清空全部 .strm 項目的流資訊（時長、音軌、視訊軌、解析度）以及已補齊的檔案大小，全部恢復到未探測狀態。播放與續播不受影響，但時長和軌道資訊需要重新探測才能恢復。此操作不可復原，確定繼續嗎？',
+            en: 'This clears the stream info (duration, audio/video tracks, resolution) and the resolved file size of every .strm item, returning them all to the unprobed state. Playback and resume keep working, but duration and track details only come back after a new probe. This cannot be undone. Continue?'
+        },
+        'clear.failed': {
+            zh: '无法启动清除：可能已有探测或清除任务在运行，请稍后再试。',
+            zhHant: '無法啟動清除：可能已有探測或清除任務在執行，請稍後再試。',
+            en: 'Unable to start the cleanup: another probe or cleanup task is running. Try again later.'
+        },
+        'clear.done': {
+            zh: '已清除全部 .strm 的流信息与文件大小。',
+            zhHant: '已清除全部 .strm 的流資訊與檔案大小。',
+            en: 'Cleared the stream info and file size of every .strm item.'
+        },
+        'clear.starting': {
+            zh: '正在清除，请稍候…',
+            zhHant: '正在清除，請稍候…',
+            en: 'Clearing, please wait…'
+        },
+        'status.state.Clearing': {
+            zh: '清除中',
+            zhHant: '清除中',
+            en: 'Clearing'
+        },
         'probe.currentItemLabel': {
             zh: '正在探测: ',
             zhHant: '正在探測: ',
@@ -303,6 +338,7 @@ export default function (view) {
     var selectMode = view.querySelector('#selectProbeMode');
     var btnStart = view.querySelector('#btnStartProbe');
     var btnStop = view.querySelector('#btnStopProbe');
+    var btnClearStreamInfo = view.querySelector('#btnClearStreamInfo');
     var lblTaskState = view.querySelector('#lblTaskState');
     var progressBar = view.querySelector('#probeProgressBar');
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
@@ -329,6 +365,7 @@ export default function (view) {
     var pollTimer = null;
     var summaryRetryTimer = null;
     var visible = false;
+    var clearRequested = false;
 
     var userPolicies = [];
     var users = [];
@@ -347,6 +384,21 @@ export default function (view) {
 
     function apiPost(path) {
         return ApiClient.ajax({ url: ApiClient.getUrl(path), type: 'POST' });
+    }
+
+    function confirmDanger(message, title) {
+        if (window.Dashboard && typeof window.Dashboard.confirm === 'function') {
+            return window.Dashboard.confirm(message, title);
+        }
+        return Promise.resolve(window.confirm(title + '\n\n' + message));
+    }
+
+    function alertDialog(message, title) {
+        if (window.Dashboard && typeof window.Dashboard.alert === 'function') {
+            window.Dashboard.alert(message, title);
+            return;
+        }
+        window.alert(message);
     }
 
     function clampDelaySeconds(value) {
@@ -637,13 +689,15 @@ export default function (view) {
             var pct = data.Total > 0 ? Math.round((data.Processed / data.Total) * 100) : 0;
             progressBar.style.width = pct + '%';
 
-            if (data.State === 'Running' || data.State === 'Stopping') {
+            if (data.State === 'Running' || data.State === 'Stopping' || data.State === 'Clearing') {
                 btnStart.style.display = 'none';
                 btnStop.style.display = 'inline-flex';
+                btnClearStreamInfo.disabled = true;
                 scheduleNextPoll();
             } else {
                 btnStart.style.display = 'inline-flex';
                 btnStop.style.display = 'none';
+                btnClearStreamInfo.disabled = false;
                 stopPolling();
 
                 // 统计已改为服务端异步计算：先触发刷新，再补取一次结果，
@@ -654,6 +708,11 @@ export default function (view) {
                         summaryRetryTimer = null;
                         loadSummary();
                     }, 1200);
+                }
+
+                if (clearRequested) {
+                    clearRequested = false;
+                    alertDialog(t('clear.done'), t('clear.title'));
                 }
             }
         });
@@ -719,6 +778,25 @@ export default function (view) {
         apiPost('FastStrm/Probe/Stop').then(function () {
             loadStatus();
         }).catch(function () {
+        });
+    });
+
+    btnClearStreamInfo.addEventListener('click', function () {
+        confirmDanger(t('clear.warning'), t('clear.title')).then(function (confirmed) {
+            if (!confirmed) {
+                return;
+            }
+
+            clearRequested = true;
+            btnClearStreamInfo.disabled = true;
+
+            apiPost('FastStrm/StreamInfo/Clear').then(function () {
+                loadStatus();
+            }).catch(function () {
+                clearRequested = false;
+                btnClearStreamInfo.disabled = false;
+                alertDialog(t('clear.failed'), t('clear.title'));
+            });
         });
     });
 

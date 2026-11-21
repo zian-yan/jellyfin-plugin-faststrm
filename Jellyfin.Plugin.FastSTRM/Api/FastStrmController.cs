@@ -120,6 +120,12 @@ public class FastStrmController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("StreamInfo/Clear")]
+    public ActionResult ClearStreamInfo()
+        => _probeService.StartClearStreamInfo()
+            ? Accepted()
+            : Conflict(new { Message = "A probe or cleanup task is already running or still stopping." });
+
     [HttpGet("Probe/Status")]
     public ActionResult GetProbeStatus()
         => Ok(new

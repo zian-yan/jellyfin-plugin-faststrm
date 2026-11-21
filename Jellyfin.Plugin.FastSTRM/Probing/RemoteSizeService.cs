@@ -36,6 +36,12 @@ public sealed class RemoteSizeService : IDisposable
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
 
+    /// <summary>
+    /// 播放前即时补大小的上限。这里刻意保留 2 秒：取源路径上已经把数据库写入挪到后台，
+    /// 再压缩这个超时只会牺牲慢速站点的补全成功率，起播收益有限。
+    /// </summary>
+    private static readonly TimeSpan PlaybackSizeLookupTimeout = TimeSpan.FromSeconds(2);
+
     private static readonly TimeSpan ForceReuseWindow = TimeSpan.FromMinutes(5);
 
     private static readonly HttpClient SharedHttpClient = CreateHttpClient();
@@ -163,6 +169,12 @@ public sealed class RemoteSizeService : IDisposable
         _itemSizes.TryRemove(itemId, out _);
     }
 
+    public void ClearCache()
+    {
+        _itemSizes.Clear();
+        _urlSizes.Clear();
+    }
+
     public void ApplySizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
         if (sources is null || sources.Count == 0)
@@ -183,6 +195,66 @@ public sealed class RemoteSizeService : IDisposable
             {
                 source.Size = size;
             }
+        }
+    }
+
+    public async Task<long?> EnsureRemoteSizeAsync(BaseItem item, CancellationToken cancellationToken)
+    {
+        var cached = TryGetCachedSize(item.Id);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        if (!StrmItem.IsStrm(item) || !NeedsRemoteSize(item))
+        {
+            return item.Size;
+        }
+
+        if (!StrmItem.TryReadRemoteUrl(item.Path, out var url))
+        {
+            return null;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(PlaybackSizeLookupTimeout);
+
+        try
+        {
+            RemoteSizeLookup lookup;
+            using (await _gate.AcquireAsync(timeoutCts.Token).ConfigureAwait(false))
+            {
+                lookup = await LookupAsync(url, timeoutCts.Token).ConfigureAwait(false);
+            }
+
+            if (lookup.Size is not long size)
+            {
+                _logger.LogDebug(
+                    "FastSTRM: Could not resolve the remote size of {Name} before playback; keeping the stored size",
+                    LogSafe.Name(item));
+                return null;
+            }
+
+            Remember(item.Id, size);
+            RememberUrl(url, size);
+
+            // 落库交给后台：UpdateItemAsync 是一次同步数据库写，放在起播关键路径上
+            // 会明显拉长取源耗时，而这次写入失败也只影响下一次探测前的库存值。
+            PersistInBackground(item, size, force: false);
+            return size;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug(
+                "FastSTRM: The playback-time size lookup for {Name} was cancelled after {Timeout}ms",
+                LogSafe.Name(item),
+                (int)PlaybackSizeLookupTimeout.TotalMilliseconds);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "FastSTRM: The playback-time size lookup for {Name} failed", LogSafe.Name(item));
+            return null;
         }
     }
 
@@ -790,6 +862,35 @@ public sealed class RemoteSizeService : IDisposable
             item.Size = previousSize;
             _logger.LogWarning(ex, "FastSTRM: Unable to persist the remote size of {Name}", LogSafe.Name(item));
         }
+    }
+
+    /// <summary>
+    /// 播放路径用的落库方式：内存字段在前台更新（避免后台线程改 BaseItem），
+    /// 只有数据库写丢到后台。异常必须全部吃掉，否则会变成未观察的任务异常。
+    /// </summary>
+    private void PersistInBackground(BaseItem item, long size, bool force)
+    {
+        if (!ShouldPersist(item, size, force))
+        {
+            return;
+        }
+
+        item.Size = size;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await WriteSizeAsync(item, size, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "FastSTRM: Unable to persist the remote size of {Name} in the background",
+                    LogSafe.Name(item));
+            }
+        });
     }
 
     private bool ShouldPersist(BaseItem item, long size, bool force)
