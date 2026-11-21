@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [3.8.0] - 2026-11-21
+## [3.7.0] - 2026-11-21
 
 ### 安全
 
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 性能
 
 - 列表页不再逐条做磁盘 I/O。`GetStaticMediaSources` 会为每个 `.strm` 打开文件读首行并额外 `stat` 一次；现在结果按 `(path, 长度, 写入时间)` 缓存 5 秒，稳态下零系统调用，库在 SMB/NFS 上时列表页卡顿明显改善。
-- 起播路径不再同步写库。补全远端大小后的 `UpdateItemAsync` 移到后台，起播只更新内存字段；同时 `IsRemoteSizeMissing` 复用同一份长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
+- `IsRemoteSizeMissing` 复用 `StrmItem` 的长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
 - `/FastStrm/Summary` 不再在请求线程里做全库统计。原先缓存未命中会同步跑一次无 `Limit` 的 `GetItemList` + 逐条 `stat`，十万条目直接把请求拖超时；现在始终返回现有快照并在后台计算，插件启动时预热一次。
 - 探测并发直接用配置值。原先 `MaxDegreeOfParallelism` 写死 16、再进闸门抢 1~16 个槽位，多出来的任务全在闸门里空转。
 - `ConcurrencyGate` 重写：`SemaphoreSlim` 当自动重置事件用会在无人等待时累加许可，之后的并发进入会把大批等待者瞬间唤醒再全部折回（惊群 + `Task.Yield` 自旋）。改为等待队列 + 单次唤醒，被唤醒者重新竞争名额，不做许可累积。
@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 修复
 
+- 给 OpenList/AList 加上签名直链后，未探测的 `.strm` 首次播放必然失败。Jellyfin 会把 `.strm` 的地址缓存在 `item.ShortcutPath`，手动改文件内容（加 `?sign=`）后该字段仍是旧 URL，只有后台探测触发元数据刷新才会重读，所以「第一次播不了、探测完才能播」。现在插件的取源路径直接读 `.strm` 的当前内容，把媒体源的 `Path` 改写成最新 URL（`Protocol=Http`、`IsRemote=true`），不再依赖可能过期的 `ShortcutPath`。
+- 同时修正容器名：Jellyfin 对 `.strm` 会推断出 `Container = "strm"`，客户端不认识这个容器。现在按 URL 的真实扩展名改成 `mkv` / `mp4` / `ts` / `iso` 等。
 - `.strm` 集合缓存随条目增删失效。原先缓存 5 分钟内不失效，删除的条目仍会被探测流程执行 `UpdateItemAsync`。
 - `_strmItems` 与它的时间戳改为打包在同一个不可变快照里发布，避免读到「新时间戳 + 旧列表」。
 - 服务器忽略 `Range` 直接返回 200 时，额外排除 `text/*` 与 `application/json`，避免把错误页字节数当成视频大小。
@@ -44,59 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 验证
 
-- `dotnet build -c Release` 0 警告 0 错误。
-- xunit 全量用例 121 条通过（本机 VSTest 无法启动 testhost，改用反射直接调用用例；新增断言覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
-
----
-
-## [3.7.2] - 2026-11-21
-
-### 修复
-
-- 给 OpenList/AList 加上签名直链后，未探测的 `.strm` 首次播放必然失败。Jellyfin 会把 `.strm` 的地址缓存在 `item.ShortcutPath`，手动改文件内容（加 `?sign=`）后该字段仍是旧 URL，只有后台探测触发元数据刷新才会重读，所以「第一次播不了、探测完才能播」。现在插件的取源路径直接读 `.strm` 的当前内容，把媒体源的 `Path` 改写成最新 URL（`Protocol=Http`、`IsRemote=true`），不再依赖可能过期的 `ShortcutPath`。
-- 同时修正容器名：Jellyfin 对 `.strm` 会推断出 `Container = "strm"`，客户端不认识这个容器。现在按 URL 的真实扩展名改成 `mkv` / `mp4` / `ts` / `iso` 等。
-
-### 验证
-
 - 断言覆盖：带 `?sign=...=:0` 的 URL 能正确写回 `Path`、`Protocol`、`IsRemote`、`Container`；`.iso?sign=` 得到 `iso`；`.strm` 内是本地路径或文件不存在时保持原状且不抛异常。
-- 构建 0 警告 0 错误；新增 `ApplyShortcutTarget_UsesTheFreshSignedUrlFromTheStrmFile` 与反例用例。
-
----
-
-## [3.7.1] - 2026-11-21
-
-### 修复
-
-- 3.7.0 的「取源前按需解析远端大小」实际没有生效：当库里的 `item.Size` 是旧的 `.strm` 文本长度、且与当前文件长度不一致时，`IsAlreadyResolved` 会把它误判成「已补全的小文件」，`EnsureRemoteSizeAsync` 直接返回旧值，一次请求都没发（日志表现为取源耗时只有 20ms 上下、`Size` 始终是 296）。现在这条兜底路径绕过该判定，直接查询远端大小并写库、写缓存，首次播放就能拿到真实大小。
-- 影响：无流 `.strm` 首次播放仍会带着几百字节的 `Size` 起播，部分播放器（SenPlayer）按该长度取流后会立刻结束，表现为「无流播不了、等后台探测补全后才能播」。
-
-### 验证
-
-- 复现日志中的状态（`Size=296`、`.strm` 实际 348 字节）后断言：取源前发出 1 次请求、拿到真实大小、回填到媒体源、第二次命中缓存不再请求。
-- 构建 0 警告 0 错误；新增 `EnsureRemoteSize_IgnoresTheStaleStrmLengthShortcut` 回归用例。
-
----
-
-## [3.7.0] - 2026-11-21
-
-### 新增
-
-- 配置页新增「清除所有流信息」按钮：清空全部 `.strm` 条目的媒体流（`media_streams`）、时长（`RunTimeTicks`）与已补全的文件大小，全部恢复到未探测状态，同时清空内存中的远端大小缓存。点击后先弹出一次警告确认，说明影响范围与不可撤销；任务在后台执行，复用现有进度条与状态显示（状态为「清除中」），可随时停止，与预探测互斥。
-
-### 修复
-
-- 3.6.8 把无法确认的媒体大小下发为 `null`，部分第三方播放器（如 SenPlayer）会据此直接放弃直连播放，客户端静默失败、服务端无任何日志。现在改为在取源前按需解析一次远端大小（`HEAD`/`Range`，2 秒上限，结果缓存 6 小时）：解析成功就下发真实大小并写库，失败则保留源自身的原值，不再下发 `null`。
-- 该解析只在大小不可信时触发；大小已补全或命中缓存的条目仍然零请求、零延迟。
-
-### 变更
-
-- 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把「播放路径上的大小兜底」与 `ApplySizeToSources` 的纯展示填充分开；后者在大小未知时不再改写入参。
-
-### 验证
-
 - 构建 0 警告 0 错误；`node --check` 与 HTML 标签配对检查通过。
-- 用伪造的 `ILibraryManager` / `IMediaStreamRepository` 跑通清除流程：流信息传空列表、时长清空、大小回到 `.strm` 长度、`UpdateItemAsync` 触发、状态回到 `Idle`、可重复执行。
-- 取源大小解析断言通过：按需解析、缓存复用、失败时保留原值、非 `.strm` 不发起请求、清缓存后重新解析。
+- xunit 全量用例通过（本机 VSTest 无法启动 testhost，改用反射直接调用 80 个 `[Fact]` 用例，0 失败；覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
 
 ---
 

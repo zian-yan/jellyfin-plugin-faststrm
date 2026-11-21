@@ -132,8 +132,6 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return (probedSources, "official-probe");
         }
 
-        await _remoteSize.EnsureRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
-
         _logger.LogDebug(
             "FastSTRM: Skipping ffprobe for {Name} (HasStreamInfo={HasStreamInfo}, User={UserId}, PolicySource={Source})",
             LogSafe.Name(item),
