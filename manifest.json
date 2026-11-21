@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.7.2.0",
+        "changelog": "### 修复\n\n- 给 OpenList/AList 加上签名直链后，未探测的 `.strm` 首次播放必然失败。Jellyfin 会把 `.strm` 的地址缓存在 `item.ShortcutPath`，手动改文件内容（加 `?sign=`）后该字段仍是旧 URL，只有后台探测触发元数据刷新才会重读，所以「第一次播不了、探测完才能播」。现在插件的取源路径直接读 `.strm` 的当前内容，把媒体源的 `Path` 改写成最新 URL（`Protocol=Http`、`IsRemote=true`），不再依赖可能过期的 `ShortcutPath`。\n- 同时修正容器名：Jellyfin 对 `.strm` 会推断出 `Container = \"strm\"`，客户端不认识这个容器。现在按 URL 的真实扩展名改成 `mkv` / `mp4` / `ts` / `iso` 等。\n\n### 验证\n\n- 断言覆盖：带 `?sign=...=:0` 的 URL 能正确写回 `Path`、`Protocol`、`IsRemote`、`Container`；`.iso?sign=` 得到 `iso`；`.strm` 内是本地路径或文件不存在时保持原状且不抛异常。\n- 构建 0 警告 0 错误；新增 `ApplyShortcutTarget_UsesTheFreshSignedUrlFromTheStrmFile` 与反例用例。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.7.2/FastSTRM.zip",
+        "checksum": "6cca116686cb3507b6076c58f7e61ab7",
+        "timestamp": "2026-11-21T12:08:33Z"
+      },
+      {
         "version": "3.7.1.0",
         "changelog": "### 修复\n\n- 3.7.0 的「取源前按需解析远端大小」实际没有生效：当库里的 `item.Size` 是旧的 `.strm` 文本长度、且与当前文件长度不一致时，`IsAlreadyResolved` 会把它误判成「已补全的小文件」，`EnsureRemoteSizeAsync` 直接返回旧值，一次请求都没发（日志表现为取源耗时只有 20ms 上下、`Size` 始终是 296）。现在这条兜底路径绕过该判定，直接查询远端大小并写库、写缓存，首次播放就能拿到真实大小。\n- 影响：无流 `.strm` 首次播放仍会带着几百字节的 `Size` 起播，部分播放器（SenPlayer）按该长度取流后会立刻结束，表现为「无流播不了、等后台探测补全后才能播」。\n\n### 验证\n\n- 复现日志中的状态（`Size=296`、`.strm` 实际 348 字节）后断言：取源前发出 1 次请求、拿到真实大小、回填到媒体源、第二次命中缓存不再请求。\n- 构建 0 警告 0 错误；新增 `EnsureRemoteSize_IgnoresTheStaleStrmLengthShortcut` 回归用例。\n\n---",
         "targetAbi": "12.0.0.0",
