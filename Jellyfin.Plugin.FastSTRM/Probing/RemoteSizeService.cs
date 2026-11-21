@@ -149,18 +149,14 @@ public sealed class RemoteSizeService : IDisposable
         return cached.Size;
     }
 
-    public void ApplyCachedSizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
+    public void ApplySizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
     {
         if (sources is null || sources.Count == 0)
         {
             return;
         }
 
-        var size = TryGetCachedSize(item.Id);
-        if (size is null || (!NeedsRemoteSize(item) && item.Size == size))
-        {
-            return;
-        }
+        var size = ResolveSizeToPublish(item);
 
         foreach (var source in sources)
         {
@@ -169,6 +165,17 @@ public sealed class RemoteSizeService : IDisposable
                 source.Size = size;
             }
         }
+    }
+
+    private long? ResolveSizeToPublish(BaseItem item)
+    {
+        var cached = TryGetCachedSize(item.Id);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        return IsRemoteSizeMissing(item) ? null : item.Size;
     }
 
     public async Task<long?> ResolveAsync(

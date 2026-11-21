@@ -246,10 +246,44 @@ public class RemoteSizeHttpTests
         var item = new Video { Path = "/media/movie.strm", Size = 180 };
         var sources = new List<MediaSourceInfo> { new() { Size = 180 } };
 
-        service.ApplyCachedSizeToSources(item, sources);
+        service.ApplySizeToSources(item, sources);
 
         Assert.Empty(handler.Requests);
-        Assert.Equal(180, sources[0].Size);
+        Assert.Null(sources[0].Size);
+    }
+
+    [Fact]
+    public void ApplySizeToSources_HidesTheStrmFileLengthWhenRemoteSizeIsUnknown()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Path = path, Size = new FileInfo(path).Length };
+            var sources = new List<MediaSourceInfo> { new() { Size = item.Size } };
+
+            service.ApplySizeToSources(item, sources);
+
+            Assert.All(sources, source => Assert.Null(source.Size));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ApplySizeToSources_KeepsAPlausibleRemoteSize()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));
+        using var service = CreateService(handler);
+        var item = new Video { Path = "/media/movie.strm", Size = EightMegabytes };
+        var sources = new List<MediaSourceInfo> { new() { Size = 180 } };
+
+        service.ApplySizeToSources(item, sources);
+
+        Assert.Equal(EightMegabytes, sources[0].Size);
     }
 
     [Fact]
@@ -264,7 +298,7 @@ public class RemoteSizeHttpTests
             await service.ResolveAsync(item, RemoteSizeTrigger.ManualIncrementalProbe, CancellationToken.None);
 
             var sources = new List<MediaSourceInfo> { new() { Size = 180 } };
-            service.ApplyCachedSizeToSources(item, sources);
+            service.ApplySizeToSources(item, sources);
 
             Assert.Single(handler.Requests);
             Assert.Equal(EightMegabytes, sources[0].Size);

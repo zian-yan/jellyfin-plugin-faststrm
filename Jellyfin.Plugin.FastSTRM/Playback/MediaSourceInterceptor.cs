@@ -118,7 +118,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         _policyResolver.RememberPlaybackPolicy(item.Id, policy);
 
-        if (!hasStreamInfo && !policy.SkipProbe)
+        if (!hasStreamInfo && !policy.SkipProbe && !StrmItem.IsProbeUnsupported(item))
         {
             _logger.LogDebug(
                 "FastSTRM: Unprobed .strm, falling back to the official media probe for {Name} (PolicySource={Source})",
@@ -152,7 +152,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         WarnIfStreamInfoMissing(item, hasStreamInfo, sources, backgroundProbeDelaySeconds);
 
-        _remoteSize.ApplyCachedSizeToSources(item, sources);
+        _remoteSize.ApplySizeToSources(item, sources);
 
         return (sources, hasStreamInfo ? "skip-probe" : "instant-no-probe");
     }
@@ -310,6 +310,19 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return;
         }
 
+        if (StrmItem.IsProbeUnsupported(item))
+        {
+            if (_warned.Mark(item.Id))
+            {
+                _logger.LogInformation(
+                    "FastSTRM: {Name} is a disc image (.iso); ffprobe cannot read it, so it is never probed. "
+                    + "Playback and progress tracking are kept; duration and track information stay unavailable.",
+                    LogSafe.Name(item));
+            }
+
+            return;
+        }
+
         var hasVideoStream = sources.Any(source =>
             source.MediaStreams is not null
             && source.MediaStreams.Any(stream => stream.Type == MediaStreamType.Video));
@@ -363,7 +376,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         if (StrmItem.IsStrm(item))
         {
-            _remoteSize.ApplyCachedSizeToSources(item, sources);
+            _remoteSize.ApplySizeToSources(item, sources);
         }
 
         return sources;

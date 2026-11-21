@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [3.6.8] - 2026-11-21
 
-暂无
+### 修复
+
+- 首次播放不再把 `.strm` 文本文件自身的字节数当成媒体大小下发给客户端。此前未补全远端大小的条目会带着 `Size=256`（`.strm` 文本长度）起播，播放器按几百字节解码，立刻到达文件末尾，表现为「第一次点播放报错或秒退，等后台把远端大小写回后才正常」。现在大小不可信时下发 `null`，客户端按未知长度的流处理；已补全或缓存过的真实大小仍照常下发。
+
+### 变更
+
+- `RemoteSizeService.ApplyCachedSizeToSources` 更名为 `ApplySizeToSources`，除应用缓存值外，还会剔除不可信的 `.strm` 文件长度，静态源与播放取源两条路径同步生效。
+- `.iso` 光盘镜像的 `.strm` 不再参与 ffprobe：入库自动探测、起播后补探测、手动全量/增量探测，以及 `OfficialProbe` 策略下的官方探测全部跳过，只解析远端大小。此前这类条目每次探测都以 `ffprobe failed - streams and format are both null` / `Input/output error` 收尾，并在起播后 10s、30s 重试；现在不发起探测，也不再重试和报错，起播时的提示降为 Info。
+
+### 验证
+
+- 构建 0 警告 0 错误；新增 `StrmItemTests` 覆盖 `.iso` 的两种判定方式（文件名、`.strm` 内 URL，含带 query 的情况）与普通视频反例。
+- 取源与探测分支断言通过：iso 条目 `runFullProbe=False`、仍会补远端大小、命中秒开路径而非 `official-probe`。
 
 ---
 

@@ -273,7 +273,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
-        runFullProbe = !StrmItem.HasStreamInfo(item);
+        runFullProbe = !StrmItem.HasStreamInfo(item) && !StrmItem.IsProbeUnsupported(item);
         return runFullProbe || RemoteSizeService.IsRemoteSizeMissing(item);
     }
 
@@ -289,7 +289,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
-        runFullProbe = !StrmItem.HasStreamInfo(item);
+        runFullProbe = !StrmItem.HasStreamInfo(item) && !StrmItem.IsProbeUnsupported(item);
         return runFullProbe || RemoteSizeService.IsRemoteSizeMissing(item);
     }
 
@@ -745,6 +745,15 @@ public sealed class ProbeService : IHostedService, IDisposable
                     return;
                 }
 
+                if (StrmItem.IsProbeUnsupported(item))
+                {
+                    _lastPlaybackProbeAttemptUtc.TryRemove(item.Id, out _);
+                    _logger.LogInformation(
+                        "FastSTRM: {Name} is a disc image that ffprobe cannot read; skipping further probe attempts",
+                        LogSafe.Name(item, LogSafe.MaxLoggedLength));
+                    return;
+                }
+
                 if (attempt >= PlaybackProbeRetryDelays.Length)
                 {
                     _logger.LogWarning(
@@ -932,6 +941,16 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private async Task ProbeItemAsync(BaseItem item, RemoteSizeTrigger trigger, CancellationToken ct)
     {
+        if (StrmItem.IsProbeUnsupported(item))
+        {
+            _logger.LogDebug(
+                "FastSTRM: Skipping ffprobe for disc image {Name}; only its remote size is resolved",
+                LogSafe.Name(item, LogSafe.MaxLoggedLength));
+
+            await FillRemoteSizeAsync(item, trigger, ct).ConfigureAwait(false);
+            return;
+        }
+
         try
         {
             await item.RefreshMetadata(
