@@ -355,8 +355,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             if (_warned.Mark(item.Id))
             {
                 _logger.LogInformation(
-                    "FastSTRM: {Name} is a disc image (.iso); ffprobe cannot read it, so it is never probed. "
-                    + "Playback and progress tracking are kept; duration and track information stay unavailable.",
+                    "FastSTRM: {Name} is a disc image (.iso) that ffprobe cannot read, so it is never probed and its duration and track information stay unavailable",
                     LogSafe.Name(item));
             }
 
@@ -381,17 +380,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         if (backgroundProbeDelaySeconds.HasValue)
         {
             _logger.LogWarning(
-                "FastSTRM: {Name} has no stream info and probing was skipped for instant playback. "
-                + "Playback progress is kept; a background probe in {Delay}s fills in the duration/track information.",
+                "FastSTRM: {Name} has no stream info yet because probing was skipped, so progress stays in memory until a background probe runs in {Delay}s",
                 LogSafe.Name(item),
                 backgroundProbeDelaySeconds.Value);
             return;
         }
 
         _logger.LogWarning(
-            "FastSTRM: {Name} has no stream info and probing was skipped for instant playback. "
-            + "Playback progress is kept, but background probing is disabled, so the duration/track "
-            + "information stays unavailable until a probe runs (enable background probing or run an incremental probe).",
+            "FastSTRM: {Name} has no stream info and background probing is disabled, so progress stays in memory and its duration stays unknown",
             LogSafe.Name(item));
     }
 

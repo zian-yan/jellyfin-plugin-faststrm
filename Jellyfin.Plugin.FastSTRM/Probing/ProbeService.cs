@@ -718,8 +718,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             _logger.LogInformation(
-                "FastSTRM: Cleared the stream info and stored size of {Cleared}/{Total} .strm item(s); "
-                + "run a probe to rebuild them",
+                "FastSTRM: Cleared the stream info and stored size of {Cleared}/{Total} .strm item(s), which a probe can rebuild",
                 cleared,
                 total);
         }
@@ -944,9 +943,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 if (attempt >= PlaybackProbeRetryDelays.Length)
                 {
                     _logger.LogWarning(
-                        "FastSTRM: Background probe of {Name} produced no stream info after {Attempts} attempt(s) "
-                        + "(RunTimeTicks=null). Playback and progress tracking are unaffected; the next playback "
-                        + "retries it, at most once every {Interval}",
+                        "FastSTRM: Background probe of {Name} produced no stream info after {Attempts} attempt(s), retrying at most once every {Interval}",
                         LogSafe.Name(item, LogSafe.MaxLoggedLength),
                         attempt + 1,
                         PlaybackProbeRetryInterval);

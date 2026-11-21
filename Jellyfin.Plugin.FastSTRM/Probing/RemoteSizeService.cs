@@ -298,8 +298,7 @@ public sealed class RemoteSizeService : IDisposable
         if (!StrmItem.TryReadRemoteUrl(item.Path, out var url, out var strmFileLength))
         {
             _logger.LogWarning(
-                "FastSTRM: No usable http(s) URL in the .strm file of {Name}; the remote size stays unchanged. "
-                + "The first non-empty, non-# line must be an absolute http/https URL.",
+                "FastSTRM: No usable http(s) URL in the first non-comment line of {Name}, so its remote size stays unchanged",
                 LogSafe.Name(item));
             return null;
         }
@@ -330,17 +329,14 @@ public sealed class RemoteSizeService : IDisposable
             // 逐跳细节只进 Debug；管理员可见的 Warning 只给失败分类。
             // 否则这条日志会变成内网探测的响应指纹（能区分端口开闭、服务类型）。
             _logger.LogDebug(
-                "FastSTRM: Remote size lookup for {Name} from {Url} failed. Reason: {Reason}. Requests go {Transport}",
+                "FastSTRM: Remote size lookup for {Name} from {Url} failed with {Reason} (requests go {Transport})",
                 LogSafe.Name(item),
                 UrlForLog(url),
                 result.Detail,
                 DescribeTransport());
 
             _logger.LogWarning(
-                "FastSTRM: Could not resolve the remote size of {Name}; the stored size stays unchanged. "
-                + "Reason: {Reason}. Requests go {Transport}. "
-                + "Enable debug logging for the per-hop detail, and check that the endpoint answers HEAD "
-                + "or a ranged GET with Content-Length/Content-Range.",
+                "FastSTRM: Could not resolve the remote size of {Name} ({Reason}) with requests going {Transport}, keeping the stored size",
                 LogSafe.Name(item),
                 result.Categories,
                 DescribeTransport());
@@ -415,8 +411,7 @@ public sealed class RemoteSizeService : IDisposable
         if (literal is false)
         {
             _logger.LogWarning(
-                "FastSTRM: Refusing to query {Url}; its address is not an allowed stream target. "
-                + "Enable 'Allow requests to private network addresses' if this is a LAN media server.",
+                "FastSTRM: Refusing to query {Url} because its address is not an allowed stream target (see 'Allow requests to private network addresses')",
                 UrlForLog(uri.ToString()));
             return false;
         }
@@ -432,8 +427,7 @@ public sealed class RemoteSizeService : IDisposable
         }
 
         _logger.LogWarning(
-            "FastSTRM: Refusing to query {Url}; its resolved address is not an allowed stream target. "
-            + "Enable 'Allow requests to private network addresses' if this is a LAN media server.",
+            "FastSTRM: Refusing to query {Url} because its resolved address is not an allowed stream target (see 'Allow requests to private network addresses')",
             UrlForLog(uri.ToString()));
         return false;
     }

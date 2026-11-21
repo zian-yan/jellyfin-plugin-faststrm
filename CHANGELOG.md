@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 变更
 
 - 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把「播放路径上的大小兜底」与 `ApplySizeToSources` 的纯展示填充分开；后者在大小未知时不再改写入参。
+- 日志统一为一句话：`RemoteSizeService`、`MediaSourceInterceptor`、`PlaybackStateInterceptor`、`ProbeService` 中由多个分句拼成的提示改为单句，最长的一条（大小解析失败的原因说明）从 4 句压到 1 句，占位符与参数保持一一对应。
 - `RemoteSizeService.ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处，`TryReadRemoteUrl` 增加返回文件长度的重载。
 
 ### 验证

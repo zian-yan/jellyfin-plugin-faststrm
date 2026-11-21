@@ -113,8 +113,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
                 if (backgroundProbeDelaySeconds.HasValue)
                 {
                     _logger.LogInformation(
-                        "FastSTRM: Keeping playback position {Position} in memory for {Name} because its duration is not known yet; "
-                        + "a background probe in {Delay}s fills in the duration, after which progress is saved normally",
+                        "FastSTRM: Keeping playback position {Position} in memory for {Name} until a background probe in {Delay}s fills in its duration",
                         reportedPositionTicks.Value,
                         LogSafe.Name(item),
                         backgroundProbeDelaySeconds.Value);
@@ -122,8 +121,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
                 else
                 {
                     _logger.LogInformation(
-                        "FastSTRM: Keeping playback position {Position} in memory for {Name} because its duration is not known yet; "
-                        + "no background probe is scheduled for this playback, so the position is not persisted and completion stays untracked until a probe runs",
+                        "FastSTRM: Keeping playback position {Position} in memory for {Name} because no background probe is scheduled to supply a duration",
                         reportedPositionTicks.Value,
                         LogSafe.Name(item));
                 }
