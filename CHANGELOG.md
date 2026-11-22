@@ -12,7 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 修复
 
 - 远端大小解析失败后进入 5 分钟冷却，死链与慢站不再让每次起播都重付一次取源超时。
-- `.strm` 取源内部异常时回落到 Jellyfin 原生链路并记一条 Warning，不再让 `PlaybackInfo` 直接失败。
 - 播放策略按「条目 + 用户」记忆，多用户同时播放同一条目不再互相覆盖策略。
 - 后台落库失败时回滚内存中的远端大小，当前进程内仍会重新尝试写入。
 
