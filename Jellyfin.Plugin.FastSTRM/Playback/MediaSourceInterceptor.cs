@@ -85,32 +85,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var startedAt = Stopwatch.GetTimestamp();
         var (call, gapMs) = TrackPlaybackCall(item.Id);
 
-        IReadOnlyList<MediaSourceInfo> sources;
-        string branch;
-
-        try
-        {
-            (sources, branch) = await ResolveStrmSourcesAsync(
-                item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // 插件自身出错不能让 PlaybackInfo 直接失败：退回原生链路，最差只是丢掉加速
-            // （可能触发一次 ffprobe），而不是让条目播不了。
-            _logger.LogWarning(
-                ex,
-                "FastSTRM: Falling back to the native pipeline for {Name} after an internal error",
-                LogSafe.Name(item));
-
-            return await _inner.GetPlaybackMediaSources(
-                item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        var (sources, branch) = await ResolveStrmSourcesAsync(
+            item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
+            .ConfigureAwait(false);
 
         LogPlaybackCall(item, call, gapMs, branch, allowMediaProbe, sources, Stopwatch.GetElapsedTime(startedAt));
 
