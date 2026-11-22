@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/zian-yan/jellyfin-plugin-faststrm/main/images/faststrm-banner.png",
     "versions": [
       {
+        "version": "3.7.1.0",
+        "changelog": "### 修复\n\n- 远端大小解析失败后进入 5 分钟冷却，死链与慢站不再让每次起播都重付一次取源超时。\n- `.strm` 取源内部异常时回落到 Jellyfin 原生链路并记一条 Warning，不再让 `PlaybackInfo` 直接失败。\n- 播放策略按「条目 + 用户」记忆，多用户同时播放同一条目不再互相覆盖策略。\n- 后台落库失败时回滚内存中的远端大小，当前进程内仍会重新尝试写入。\n\n### 优化\n\n- 远端大小查询改为与 inner 取源并行发起，起播延迟由「两者相加」变为「取较大者」。\n- 播放路径使用独立并发闸门，全库扫描期间起播的大小查询不再排队等名额。\n\n### 文档\n\n- 补充批量探测双重限流的注释，说明 DOP 与全局闸门不可互相替代。\n- 补充 `GetMediaSource` 保持原生行为的注释。\n\n### 验证\n\n- xunit 用例全部通过（125 条，0 失败）；构建 0 警告 0 错误。\n\n---",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/zian-yan/jellyfin-plugin-faststrm/releases/download/v3.7.1/FastSTRM.zip",
+        "checksum": "db2355363f8f58681915ccab1e9f90d5",
+        "timestamp": "2026-11-22T08:31:32Z"
+      },
+      {
         "version": "3.7.0.0",
         "changelog": "### 新增\n\n- 配置页新增「清除所有流信息」按钮（`POST /FastStrm/StreamInfo/Clear`，管理员权限）：清空全部 `.strm` 的流信息、时长与已补全大小，恢复为未探测状态并清空内存大小缓存；执行前警告确认，后台运行、可随时停止。\n\n### 安全\n\n- `AllowPrivateNetworkTargets` 默认改为 `false`，局域网媒体服务器需在配置页显式开启，已有显式配置不受影响。\n- 重定向改为手动逐跳校验，堵住走代理时「公网地址 → 302 → 内网地址」的穿透。\n- 目标解析失败改为 fail-closed，多 A 记录中任一非法即整体拒绝。\n- 补上 `198.18.0.0/15`、`192.0.0.0/24` 两个保留网段。\n- 大小查询失败的管理员 Warning 只输出失败分类，逐跳细节降到 Debug。\n- 大小缓存改以去 query 的 URL 为 key，签名凭证不再长期驻留内存。\n\n### 修复\n\n- 取源时直接读 `.strm` 当前内容改写媒体源地址，不再依赖可能过期的 `ShortcutPath`，带签名直链首次播放即可播。\n- 容器名按 URL 实际扩展名改写为 `mkv` / `mp4` / `ts` / `iso` 等，不再下发客户端不认识的 `strm`。\n- `.strm` 集合缓存随条目增删失效，`_strmItems` 与时间戳合并为同一个不可变快照。\n- 服务器忽略 `Range` 返回 200 时额外排除 `text/*` 与 `application/json`，避免把错误页字节数当成视频大小。\n- 取源前按需解析一次远端大小（2 秒上限、缓存 6 小时），失败保留源自身原值，不再下发 `null` 让第三方播放器放弃直连。\n- 兜底路径不再被 `IsAlreadyResolved` 短路，`.strm` 文本长度残留时首次播放也能下发真实大小。\n- `RemoteSizeService` 释放自建的 `HttpClient`；`MediaSourceInterceptor` 恢复可空引用检查；播放进度日志改为描述实际行为。\n\n### 优化\n\n- 列表页按 `(path, 长度, 写入时间)` 缓存 `.strm` 解析结果 5 秒，稳态零系统调用。\n- 起播不再同步写库，单次取源的文件系统调用从 3 次降到最多 1 次。\n- `/FastStrm/Summary` 始终返回现有快照并在后台刷新，插件启动时预热一次。\n- 探测并发直接采用配置值；`ConcurrencyGate` 改为等待队列 + 单次唤醒，消除惊群与自旋。\n- 大小缓存溢出改为按最旧时间淘汰一批，不再整表清空。\n- 取源详细日志从 Information 降到 Debug。\n\n### 变更\n\n- 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把取源大小兜底与 `ApplySizeToSources` 的展示填充分开。\n- 日志统一为单句：`RemoteSizeService`、`MediaSourceInterceptor`、`PlaybackStateInterceptor`、`ProbeService` 中多分句提示改为一句话。\n- `ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处。\n- Release 工作流把 `workflow_dispatch` 输入通过环境变量传入脚本，不再拼进 shell。\n\n### 验证\n\n- xunit 全量用例通过（84 个 `[Fact]`，0 失败）；构建 0 警告 0 错误，`node --check` 与 HTML 标签配对检查通过。\n- 断言覆盖签名 URL 改写与容器名推断、取源大小兜底、清除流信息全流程，以及重定向拦截与 `ConcurrencyGate` 升降限额。\n\n---",
         "targetAbi": "12.0.0.0",
