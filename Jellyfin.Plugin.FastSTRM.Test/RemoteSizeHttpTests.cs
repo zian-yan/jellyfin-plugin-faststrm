@@ -369,6 +369,52 @@ public class RemoteSizeHttpTests
     }
 
     [Fact]
+    public async Task EnsureRemoteSize_DoesNotRetryInsideTheFailureCooldown()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.MethodNotAllowed, 0));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var item = new Video { Id = Guid.NewGuid(), Path = path, Size = new FileInfo(path).Length };
+
+            Assert.Null(await service.EnsureRemoteSizeAsync(item, CancellationToken.None));
+            var requestsAfterFirstFailure = handler.Requests.Count;
+            Assert.True(requestsAfterFirstFailure > 0);
+
+            Assert.Null(await service.EnsureRemoteSizeAsync(item, CancellationToken.None));
+            Assert.Equal(requestsAfterFirstFailure, handler.Requests.Count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureRemoteSize_TheFailureCooldownIsPerItem()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.MethodNotAllowed, 0));
+        using var service = CreateService(handler);
+        var path = WriteStrm("http://93.184.216.34/movie.iso\n");
+        try
+        {
+            var failed = new Video { Id = Guid.NewGuid(), Path = path, Size = new FileInfo(path).Length };
+            Assert.Null(await service.EnsureRemoteSizeAsync(failed, CancellationToken.None));
+
+            var requestsAfterFirstItem = handler.Requests.Count;
+            var other = new Video { Id = Guid.NewGuid(), Path = path, Size = new FileInfo(path).Length };
+            Assert.Null(await service.EnsureRemoteSizeAsync(other, CancellationToken.None));
+
+            Assert.True(handler.Requests.Count > requestsAfterFirstItem);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ApplySizeToSources_KeepsAPlausibleRemoteSize()
     {
         var handler = new StubHandler(_ => Json(HttpStatusCode.OK, EightMegabytes));

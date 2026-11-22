@@ -99,7 +99,7 @@ public sealed class PlaybackStateInterceptor : IUserDataManager, IDisposable
             data.PlaybackPositionTicks = reportedPositionTicks.Value;
 
             var playingUserId = ResolvePlayingUserId(item);
-            var policy = _policyResolver.TryGetPlaybackPolicy(item.Id, out var playbackPolicy)
+            var policy = _policyResolver.TryGetPlaybackPolicy(item.Id, playingUserId, out var playbackPolicy)
                 ? playbackPolicy
                 : _policyResolver.Resolve(playingUserId);
 

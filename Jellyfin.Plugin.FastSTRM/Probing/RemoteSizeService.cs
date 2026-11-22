@@ -32,9 +32,21 @@ public sealed class RemoteSizeService : IDisposable
 
     private const int MaxConcurrentResolutions = 8;
 
+    /// <summary>
+    /// 播放路径专用的并发上限。与批量探测的闸门分开：两者共用一条 FIFO 队列时，
+    /// 扫描把名额占满后交互式取源只能排队，2 秒预算会全花在等队上而不是网络往返。
+    /// </summary>
+    private const int PlaybackResolutionLimit = 4;
+
     private const int MaxRedirects = 3;
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// 解析失败后的冷却时间。没有这一层，死链或慢站会让每次播放都重付一次
+    /// 取源超时；5 分钟足够短，站点恢复后很快能重新补上。
+    /// </summary>
+    private static readonly TimeSpan FailureTtl = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// 播放前即时补大小的上限。这里刻意保留 2 秒：取源路径上已经把数据库写入挪到后台，
@@ -62,9 +74,16 @@ public sealed class RemoteSizeService : IDisposable
 
     private readonly ConcurrencyGate _gate = new(ReadResolutionLimit);
 
+    private readonly ConcurrencyGate _playbackGate = new(() => PlaybackResolutionLimit);
+
     private readonly ConcurrentDictionary<Guid, CachedSize> _itemSizes = new();
 
     private readonly ConcurrentDictionary<string, CachedSize> _urlSizes = new(StringComparer.Ordinal);
+
+    /// <summary>最近一次失败的时间戳；只在播放路径上使用，用来跳过冷却期内的重试。</summary>
+    private readonly ConcurrentDictionary<Guid, long> _failedItems = new();
+
+    private int _failedItemCount;
 
     public RemoteSizeService(ILibraryManager libraryManager, ILogger<RemoteSizeService> logger)
         : this(libraryManager, logger, null)
@@ -167,12 +186,19 @@ public sealed class RemoteSizeService : IDisposable
         }
 
         _itemSizes.TryRemove(itemId, out _);
+
+        if (_failedItems.TryRemove(itemId, out _) && Interlocked.Decrement(ref _failedItemCount) < 0)
+        {
+            Interlocked.Exchange(ref _failedItemCount, 0);
+        }
     }
 
     public void ClearCache()
     {
         _itemSizes.Clear();
         _urlSizes.Clear();
+        _failedItems.Clear();
+        Interlocked.Exchange(ref _failedItemCount, 0);
     }
 
     public void ApplySizeToSources(BaseItem item, IReadOnlyList<MediaSourceInfo>? sources)
@@ -211,6 +237,13 @@ public sealed class RemoteSizeService : IDisposable
             return item.Size;
         }
 
+        // 冷却期内直接放弃。这条路径在每次 PlaybackInfo 上都会走一遍，
+        // 失败结果不缓存的话，死链和慢站会让每次起播都重付一次超时。
+        if (IsRecentlyFailed(item.Id))
+        {
+            return null;
+        }
+
         if (!StrmItem.TryReadRemoteUrl(item.Path, out var url))
         {
             return null;
@@ -222,13 +255,14 @@ public sealed class RemoteSizeService : IDisposable
         try
         {
             RemoteSizeLookup lookup;
-            using (await _gate.AcquireAsync(timeoutCts.Token).ConfigureAwait(false))
+            using (await _playbackGate.AcquireAsync(timeoutCts.Token).ConfigureAwait(false))
             {
                 lookup = await LookupAsync(url, timeoutCts.Token).ConfigureAwait(false);
             }
 
             if (lookup.Size is not long size)
             {
+                RememberFailure(item.Id);
                 _logger.LogDebug(
                     "FastSTRM: Could not resolve the remote size of {Name} before playback; keeping the stored size",
                     LogSafe.Name(item));
@@ -245,6 +279,12 @@ public sealed class RemoteSizeService : IDisposable
         }
         catch (OperationCanceledException)
         {
+            // 客户端主动取消不算站点有问题，不该进入冷却期。
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                RememberFailure(item.Id);
+            }
+
             _logger.LogDebug(
                 "FastSTRM: The playback-time size lookup for {Name} was cancelled after {Timeout}ms",
                 LogSafe.Name(item),
@@ -253,8 +293,52 @@ public sealed class RemoteSizeService : IDisposable
         }
         catch (Exception ex)
         {
+            RememberFailure(item.Id);
             _logger.LogDebug(ex, "FastSTRM: The playback-time size lookup for {Name} failed", LogSafe.Name(item));
             return null;
+        }
+    }
+
+    private bool IsRecentlyFailed(Guid itemId)
+    {
+        if (itemId == Guid.Empty || !_failedItems.TryGetValue(itemId, out var failedAtTicks))
+        {
+            return false;
+        }
+
+        if (DateTime.UtcNow.Ticks - failedAtTicks < FailureTtl.Ticks)
+        {
+            return true;
+        }
+
+        if (_failedItems.TryRemove(itemId, out _))
+        {
+            Interlocked.Decrement(ref _failedItemCount);
+        }
+
+        return false;
+    }
+
+    private void RememberFailure(Guid itemId)
+    {
+        if (itemId == Guid.Empty)
+        {
+            return;
+        }
+
+        if (Volatile.Read(ref _failedItemCount) >= MaxCacheEntries)
+        {
+            _failedItems.Clear();
+            Interlocked.Exchange(ref _failedItemCount, 0);
+        }
+
+        if (_failedItems.TryAdd(itemId, DateTime.UtcNow.Ticks))
+        {
+            Interlocked.Increment(ref _failedItemCount);
+        }
+        else
+        {
+            _failedItems[itemId] = DateTime.UtcNow.Ticks;
         }
     }
 
@@ -869,6 +953,7 @@ public sealed class RemoteSizeService : IDisposable
             return;
         }
 
+        var previousSize = item.Size;
         item.Size = size;
 
         _ = Task.Run(async () =>
@@ -879,6 +964,13 @@ public sealed class RemoteSizeService : IDisposable
             }
             catch (Exception ex)
             {
+                // 回滚内存值，否则 ShouldPersist 会一直认为「已经是这个大小」，
+                // 本次进程内再也不会重试落库，重启后条目又回到未就绪状态。
+                if (item.Size == size)
+                {
+                    item.Size = previousSize;
+                }
+
                 _logger.LogDebug(
                     ex,
                     "FastSTRM: Unable to persist the remote size of {Name} in the background",

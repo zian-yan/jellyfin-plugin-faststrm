@@ -22,7 +22,7 @@ public sealed class PlaybackPolicyResolver
     private readonly object _rebuildLock = new();
     private readonly MarkerSet<string> _warnedEntries = new(MaxWarnedEntries);
 
-    private readonly ConcurrentDictionary<Guid, EffectivePlaybackPolicy> _playbackPolicies = new();
+    private readonly ConcurrentDictionary<PlaybackPolicyKey, EffectivePlaybackPolicy> _playbackPolicies = new();
 
     private int _playbackPolicyCount;
 
@@ -61,7 +61,11 @@ public sealed class PlaybackPolicyResolver
         return userId != Guid.Empty && GetSnapshot().Policies.TryGetValue(userId, out policy);
     }
 
-    public void RememberPlaybackPolicy(Guid itemId, EffectivePlaybackPolicy policy)
+    /// <summary>
+    /// 记下「某用户看到的这条条目用的是哪套策略」。键必须带上 userId：同一部片
+    /// 可能被多个用户同时播放，策略是按用户配的，只按 itemId 记会互相覆盖。
+    /// </summary>
+    public void RememberPlaybackPolicy(Guid itemId, Guid? userId, EffectivePlaybackPolicy policy)
     {
         if (itemId == Guid.Empty)
         {
@@ -74,19 +78,22 @@ public sealed class PlaybackPolicyResolver
             Interlocked.Exchange(ref _playbackPolicyCount, 0);
         }
 
-        if (_playbackPolicies.TryAdd(itemId, policy))
+        var key = new PlaybackPolicyKey(itemId, userId ?? Guid.Empty);
+
+        if (_playbackPolicies.TryAdd(key, policy))
         {
             Interlocked.Increment(ref _playbackPolicyCount);
         }
         else
         {
-            _playbackPolicies[itemId] = policy;
+            _playbackPolicies[key] = policy;
         }
     }
 
-    public bool TryGetPlaybackPolicy(Guid itemId, out EffectivePlaybackPolicy policy)
+    public bool TryGetPlaybackPolicy(Guid itemId, Guid? userId, out EffectivePlaybackPolicy policy)
     {
-        if (itemId != Guid.Empty && _playbackPolicies.TryGetValue(itemId, out policy))
+        if (itemId != Guid.Empty
+            && _playbackPolicies.TryGetValue(new PlaybackPolicyKey(itemId, userId ?? Guid.Empty), out policy))
         {
             return true;
         }
@@ -338,6 +345,8 @@ public sealed class PlaybackPolicyResolver
         => string.IsNullOrEmpty(value) ? "(empty)" : LogSafe.Sanitize(value, 64);
 
     private bool ShouldWarn(string key) => _warnedEntries.Mark(key);
+
+    private readonly record struct PlaybackPolicyKey(Guid ItemId, Guid UserId);
 
     private sealed record Snapshot(
         EffectivePlaybackPolicy Global,

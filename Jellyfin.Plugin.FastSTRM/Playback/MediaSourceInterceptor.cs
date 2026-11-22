@@ -85,9 +85,32 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var startedAt = Stopwatch.GetTimestamp();
         var (call, gapMs) = TrackPlaybackCall(item.Id);
 
-        var (sources, branch) = await ResolveStrmSourcesAsync(
-            item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
-            .ConfigureAwait(false);
+        IReadOnlyList<MediaSourceInfo> sources;
+        string branch;
+
+        try
+        {
+            (sources, branch) = await ResolveStrmSourcesAsync(
+                item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 插件自身出错不能让 PlaybackInfo 直接失败：退回原生链路，最差只是丢掉加速
+            // （可能触发一次 ffprobe），而不是让条目播不了。
+            _logger.LogWarning(
+                ex,
+                "FastSTRM: Falling back to the native pipeline for {Name} after an internal error",
+                LogSafe.Name(item));
+
+            return await _inner.GetPlaybackMediaSources(
+                item, user, allowMediaProbe, enablePathSubstitution, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         LogPlaybackCall(item, call, gapMs, branch, allowMediaProbe, sources, Stopwatch.GetElapsedTime(startedAt));
 
@@ -116,7 +139,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var hasStreamInfo = StrmItem.HasStreamInfo(item);
         var policy = _policyResolver.Resolve(user?.Id);
 
-        _policyResolver.RememberPlaybackPolicy(item.Id, policy);
+        _policyResolver.RememberPlaybackPolicy(item.Id, user?.Id, policy);
 
         if (!hasStreamInfo && !policy.SkipProbe && !StrmItem.IsProbeUnsupported(item))
         {
@@ -132,8 +155,6 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return (probedSources, "official-probe");
         }
 
-        await _remoteSize.EnsureRemoteSizeAsync(item, cancellationToken).ConfigureAwait(false);
-
         _logger.LogDebug(
             "FastSTRM: Skipping ffprobe for {Name} (HasStreamInfo={HasStreamInfo}, User={UserId}, PolicySource={Source})",
             LogSafe.Name(item),
@@ -141,9 +162,15 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             user?.Id,
             policy.Source);
 
+        // 远端大小与 inner 取源并行发起。原来这一跳串在取源之前，慢站会把这整段
+        // DNS + 握手 + HEAD 直接加到起播延迟上，而结果只用于填充下发源的 Size。
+        var sizeLookup = _remoteSize.EnsureRemoteSizeAsync(item, cancellationToken);
+
         var sources = await _inner.GetPlaybackMediaSources(
             item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
             .ConfigureAwait(false);
+
+        await AwaitSizeLookupAsync(item, sizeLookup).ConfigureAwait(false);
 
         ApplyShortcutTarget(item, sources);
 
@@ -159,6 +186,25 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         _remoteSize.ApplySizeToSources(item, sources);
 
         return (sources, hasStreamInfo ? "skip-probe" : "instant-no-probe");
+    }
+
+    /// <summary>
+    /// 等待并行发起的大小查询。失败只影响下发的 Size，不能影响这次取源，
+    /// 因此这里把异常全部吃掉。
+    /// </summary>
+    private async Task AwaitSizeLookupAsync(BaseItem item, Task<long?> lookup)
+    {
+        try
+        {
+            await lookup.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "FastSTRM: The playback-time size lookup for {Name} failed",
+                LogSafe.Name(item));
+        }
     }
 
     private void LogPlaybackCall(
@@ -419,6 +465,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return sources;
     }
 
+    /// <summary>
+    /// 这个入口刻意保持原生行为，不改写 .strm 的地址与大小。调用方都在服务端程序集里
+    /// （Controller 程序集中没有任何调用点），无法确认它们是否依赖 .strm 的本地路径；
+    /// 而 .strm 的实际起播走的是 GetPlaybackMediaSources，地址改写在那里完成。
+    /// </summary>
     public Task<MediaSourceInfo> GetMediaSource(BaseItem item, string mediaSourceId, string liveStreamId, bool enablePathSubstitution, CancellationToken cancellationToken)
         => _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken);
 

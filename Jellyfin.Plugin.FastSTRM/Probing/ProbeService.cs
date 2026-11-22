@@ -1014,6 +1014,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 // 直接用配置的并发数。之前写死 16 再在循环体内抢 _probeGate 的槽位，
                 // 等于先开 16 个任务再把多出来的全部堵在闸门里空转。
+                //
+                // 这里的 DOP 与 _probeGate 的上限数值相同，但两者并不等价，不能互相替代：
+                // DOP 只管「批量循环一次开几个任务」，闸门管的是「批量 + 自动探测 + 播放探测」
+                // 的全局并发上限。删掉闸门会让交互式探测与批量叠加，突破用户配置的并发数。
                 MaxDegreeOfParallelism = GetConfiguredProbeLimit(),
                 CancellationToken = ct
             };
@@ -1024,6 +1028,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 try
                 {
+                    // 批量循环也必须占全局名额：只靠 DOP 限流时，扫描期间触发的
+                    // 自动探测与播放探测会与批量并发叠加，实际并发超过配置值。
                     using var slot = await AcquireProbeSlotAsync(token).ConfigureAwait(false);
 
                     var index = Interlocked.Increment(ref probeIndex);
