@@ -11,54 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 新增
 
-- 配置页新增「清除所有流信息」按钮（`POST /FastStrm/StreamInfo/Clear`，管理员权限）：清空全部 `.strm` 条目的媒体流（`media_streams`）、时长（`RunTimeTicks`）与已补全的文件大小，全部恢复到未探测状态，同时清空内存中的远端大小缓存。点击后先弹出一次警告确认，说明影响范围与不可撤销；任务在后台执行，复用现有进度条与状态显示（状态为「清除中」），可随时停止，与预探测互斥。
+- 配置页新增「清除所有流信息」按钮（`POST /FastStrm/StreamInfo/Clear`，管理员权限）：清空全部 `.strm` 的流信息、时长与已补全大小，恢复为未探测状态并清空内存大小缓存；执行前警告确认，后台运行、可随时停止。
 
 ### 安全
 
-- **默认不再允许请求内网地址**（`AllowPrivateNetworkTargets` 默认值 `true` → `false`）。`.strm` 内容完全由外部提供（用户上传、共享库、他人投喂的媒体库），默认放行等于把插件变成内网探测跳板，可以打到 `127.0.0.1`、`10.0.0.0/8`、内网管理端口（Redis / Docker API / ES 等）。局域网媒体服务器需要在配置页显式勾选「允许请求内网地址」。已有的显式配置不受影响。
-- 重定向改为手动逐跳校验。原先依赖 `AllowAutoRedirect`，直连时由建连回调兜底，但走代理时回调只看到代理地址，`公网地址 → 302 → 内网地址` 可以直接穿透。同时关闭自动重定向后，被拒的跳转不会再借 `ranged GET` 回退打第二次。
-- 目标解析失败改为 fail-closed，并把 `Any` 判据改成 `All`：多 A 记录里只要有一条非法就整体拒绝（旧实现有一条合法即放行，而代理侧可能自行挑中那条非法的）。
-- 补上 `198.18.0.0/15`、`192.0.0.0/24` 两个保留网段的拦截。
-- 远端大小查询失败时，管理员可见的 Warning 只输出失败分类；逐跳细节（状态码、Content-Type）降到 Debug，避免日志本身成为内网探测的响应指纹。
-- 远端大小缓存以「去 query 的 URL」为 key（签名参数不再作为 key），签名凭证不再在内存中长期驻留。
-- Release 工作流把 `workflow_dispatch` 的输入通过环境变量传入脚本，不再直接拼进 shell。
-
-### 性能
-
-- 列表页不再逐条做磁盘 I/O。`GetStaticMediaSources` 会为每个 `.strm` 打开文件读首行并额外 `stat` 一次；现在结果按 `(path, 长度, 写入时间)` 缓存 5 秒，稳态下零系统调用，库在 SMB/NFS 上时列表页卡顿明显改善。
-- 起播路径不再同步写库。补全远端大小后的 `UpdateItemAsync` 移到后台，起播只更新内存字段；同时 `IsRemoteSizeMissing` 复用同一份长度缓存，一次取源从 3 次 `stat` 降到最多 1 次。
-- `/FastStrm/Summary` 不再在请求线程里做全库统计。原先缓存未命中会同步跑一次无 `Limit` 的 `GetItemList` + 逐条 `stat`，十万条目直接把请求拖超时；现在始终返回现有快照并在后台计算，插件启动时预热一次。
-- 探测并发直接用配置值。原先 `MaxDegreeOfParallelism` 写死 16、再进闸门抢 1~16 个槽位，多出来的任务全在闸门里空转。
-- `ConcurrencyGate` 重写：`SemaphoreSlim` 当自动重置事件用会在无人等待时累加许可，之后的并发进入会把大批等待者瞬间唤醒再全部折回（惊群 + `Task.Yield` 自旋）。改为等待队列 + 单次唤醒，被唤醒者重新竞争名额，不做许可累积。
-- 缓存溢出改为按最旧时间淘汰一批，不再 `Clear()` 全清（一次清空会让后续探测把远端 HEAD 请求重新打满）。
-- 每个取源请求的详细日志从 Information 降到 Debug，避免播放/进度上报路径把日志文件写爆。
+- `AllowPrivateNetworkTargets` 默认改为 `false`，局域网媒体服务器需在配置页显式开启，已有显式配置不受影响。
+- 重定向改为手动逐跳校验，堵住走代理时「公网地址 → 302 → 内网地址」的穿透。
+- 目标解析失败改为 fail-closed，多 A 记录中任一非法即整体拒绝。
+- 补上 `198.18.0.0/15`、`192.0.0.0/24` 两个保留网段。
+- 大小查询失败的管理员 Warning 只输出失败分类，逐跳细节降到 Debug。
+- 大小缓存改以去 query 的 URL 为 key，签名凭证不再长期驻留内存。
 
 ### 修复
 
-- 给 OpenList/AList 加上签名直链后，未探测的 `.strm` 首次播放必然失败。Jellyfin 会把 `.strm` 的地址缓存在 `item.ShortcutPath`，手动改文件内容（加 `?sign=`）后该字段仍是旧 URL，只有后台探测触发元数据刷新才会重读，所以「第一次播不了、探测完才能播」。现在插件的取源路径直接读 `.strm` 的当前内容，把媒体源的 `Path` 改写成最新 URL（`Protocol=Http`、`IsRemote=true`），不再依赖可能过期的 `ShortcutPath`。
-- 同时修正容器名：Jellyfin 对 `.strm` 会推断出 `Container = "strm"`，客户端不认识这个容器。现在按 URL 的真实扩展名改成 `mkv` / `mp4` / `ts` / `iso` 等。
-- `.strm` 集合缓存随条目增删失效。原先缓存 5 分钟内不失效，删除的条目仍会被探测流程执行 `UpdateItemAsync`。
-- `_strmItems` 与它的时间戳改为打包在同一个不可变快照里发布，避免读到「新时间戳 + 旧列表」。
-- 服务器忽略 `Range` 直接返回 200 时，额外排除 `text/*` 与 `application/json`，避免把错误页字节数当成视频大小。
-- 注入自定义 `HttpMessageHandler` 的 `RemoteSizeService` 现在会释放自己创建的 `HttpClient`。
-- `MediaSourceInterceptor` 恢复可空引用检查（去掉文件级 `#nullable disable`）。
-- 播放进度日志改为描述实际行为：无时长的 `.strm` 只更新内存中的续播点，不会立即落库（这是为了避免退出时被误标为已观看）。
-- 3.6.8 把无法确认的媒体大小下发为 `null`，部分第三方播放器（如 SenPlayer）会据此直接放弃直连播放，客户端静默失败、服务端无任何日志。现在改为在取源前按需解析一次远端大小（`HEAD`/`Range`，2 秒上限，结果缓存 6 小时）：解析成功就下发真实大小并写库，失败则保留源自身的原值，不再下发 `null`。
-- 该解析只在大小不可信时触发；大小已补全或命中缓存的条目仍然零请求、零延迟。
-- 兜底路径不再走 `ResolveAsync` 的 `IsAlreadyResolved` 短路：库里的 `item.Size` 是旧 `.strm` 文本长度、且与当前文件长度不同时会被误判成「已补全的小文件」，导致一次请求都不发（日志里取源只有 20ms、`Size` 始终是 296）。现在直接查询远端大小并写库、写缓存，首次播放即可下发真实大小。
+- 取源时直接读 `.strm` 当前内容改写媒体源地址，不再依赖可能过期的 `ShortcutPath`，带签名直链首次播放即可播。
+- 容器名按 URL 实际扩展名改写为 `mkv` / `mp4` / `ts` / `iso` 等，不再下发客户端不认识的 `strm`。
+- `.strm` 集合缓存随条目增删失效，`_strmItems` 与时间戳合并为同一个不可变快照。
+- 服务器忽略 `Range` 返回 200 时额外排除 `text/*` 与 `application/json`，避免把错误页字节数当成视频大小。
+- 取源前按需解析一次远端大小（2 秒上限、缓存 6 小时），失败保留源自身原值，不再下发 `null` 让第三方播放器放弃直连。
+- 兜底路径不再被 `IsAlreadyResolved` 短路，`.strm` 文本长度残留时首次播放也能下发真实大小。
+- `RemoteSizeService` 释放自建的 `HttpClient`；`MediaSourceInterceptor` 恢复可空引用检查；播放进度日志改为描述实际行为。
+
+### 优化
+
+- 列表页按 `(path, 长度, 写入时间)` 缓存 `.strm` 解析结果 5 秒，稳态零系统调用。
+- 起播不再同步写库，单次取源的文件系统调用从 3 次降到最多 1 次。
+- `/FastStrm/Summary` 始终返回现有快照并在后台刷新，插件启动时预热一次。
+- 探测并发直接采用配置值；`ConcurrencyGate` 改为等待队列 + 单次唤醒，消除惊群与自旋。
+- 大小缓存溢出改为按最旧时间淘汰一批，不再整表清空。
+- 取源详细日志从 Information 降到 Debug。
 
 ### 变更
 
-- 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把「播放路径上的大小兜底」与 `ApplySizeToSources` 的纯展示填充分开；后者在大小未知时不再改写入参。
-- 日志统一为一句话：`RemoteSizeService`、`MediaSourceInterceptor`、`PlaybackStateInterceptor`、`ProbeService` 中由多个分句拼成的提示改为单句，最长的一条（大小解析失败的原因说明）从 4 句压到 1 句，占位符与参数保持一一对应。
-- `RemoteSizeService.ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处，`TryReadRemoteUrl` 增加返回文件长度的重载。
+- 新增 `RemoteSizeService.EnsureRemoteSizeAsync`，把取源大小兜底与 `ApplySizeToSources` 的展示填充分开。
+- 日志统一为单句：`RemoteSizeService`、`MediaSourceInterceptor`、`PlaybackStateInterceptor`、`ProbeService` 中多分句提示改为一句话。
+- `ReadRemoteUrl` 与 `StrmItem.TryReadRemoteUrl` 两份重复的首行解析合并为一处。
+- Release 工作流把 `workflow_dispatch` 输入通过环境变量传入脚本，不再拼进 shell。
 
 ### 验证
 
-- 断言覆盖：带 `?sign=...=:0` 的 URL 能正确写回 `Path`、`Protocol`、`IsRemote`、`Container`；`.iso?sign=` 得到 `iso`；`.strm` 内是本地路径或文件不存在时保持原状且不抛异常。
-- 断言覆盖：取源大小兜底（按需解析 / 缓存复用 / 失败保留原值 / 非 `.strm` 不发请求 / 清缓存后重解析），以及清除流信息的完整流程（流信息传空列表、时长清空、大小回到 `.strm` 长度、`UpdateItemAsync` 触发、状态回到 `Idle`、可重复执行）。
-- 构建 0 警告 0 错误；`node --check` 与 HTML 标签配对检查通过。
-- xunit 全量用例通过（本机 VSTest 无法启动 testhost，改用反射直接调用 84 个 `[Fact]` 用例，0 失败；另覆盖重定向拦截、签名 URL 缓存复用、`ConcurrencyGate` 的升降限额与取消语义）。
+- xunit 全量用例通过（84 个 `[Fact]`，0 失败）；构建 0 警告 0 错误，`node --check` 与 HTML 标签配对检查通过。
+- 断言覆盖签名 URL 改写与容器名推断、取源大小兜底、清除流信息全流程，以及重定向拦截与 `ConcurrencyGate` 升降限额。
 
 ---
 
@@ -66,17 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 修复
 
-- 首次播放不再把 `.strm` 文本文件自身的字节数当成媒体大小下发给客户端。此前未补全远端大小的条目会带着 `Size=256`（`.strm` 文本长度）起播，播放器按几百字节解码，立刻到达文件末尾，表现为「第一次点播放报错或秒退，等后台把远端大小写回后才正常」。现在大小不可信时下发 `null`，客户端按未知长度的流处理；已补全或缓存过的真实大小仍照常下发。
+- 首次播放不再把 `.strm` 文本长度（约 256 字节）当成媒体大小下发：大小不可信时下发 `null`，已补全或缓存过的真实大小照常下发。
 
 ### 变更
 
-- `RemoteSizeService.ApplyCachedSizeToSources` 更名为 `ApplySizeToSources`，除应用缓存值外，还会剔除不可信的 `.strm` 文件长度，静态源与播放取源两条路径同步生效。
-- `.iso` 光盘镜像的 `.strm` 不再参与 ffprobe：入库自动探测、起播后补探测、手动全量/增量探测，以及 `OfficialProbe` 策略下的官方探测全部跳过，只解析远端大小。此前这类条目每次探测都以 `ffprobe failed - streams and format are both null` / `Input/output error` 收尾，并在起播后 10s、30s 重试；现在不发起探测，也不再重试和报错，起播时的提示降为 Info。
+- `ApplyCachedSizeToSources` 更名为 `ApplySizeToSources`，除应用缓存值外还会剔除不可信的 `.strm` 文件长度，静态源与取源两条路径同时生效。
+- `.iso` 的 `.strm` 不再参与 ffprobe（入库、起播、手动增量/全量与官方探测全部跳过），只补远端大小，起播提示降为 Info。
 
 ### 验证
 
-- 构建 0 警告 0 错误；新增 `StrmItemTests` 覆盖 `.iso` 的两种判定方式（文件名、`.strm` 内 URL，含带 query 的情况）与普通视频反例。
-- 取源与探测分支断言通过：iso 条目 `runFullProbe=False`、仍会补远端大小、命中秒开路径而非 `official-probe`。
+- 构建 0 警告 0 错误；新增 `StrmItemTests` 覆盖 `.iso` 的两种判定方式与普通视频反例，取源与探测分支断言通过。
 
 ---
 
