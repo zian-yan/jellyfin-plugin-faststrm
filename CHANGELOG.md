@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.7.2] - 2026-11-24
+
+### 优化
+
+- 起播不再等待远端大小查询，未命中时只下发已知大小，由后台补齐。
+
+---
+
 ## [3.7.1] - 2026-11-22
 
 ### 修复
