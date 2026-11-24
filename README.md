@@ -94,14 +94,6 @@ Routing happens in `MediaSourceInterceptor.GetPlaybackMediaSources`; `allowMedia
 
 "Ready" means `RunTimeTicks > 0` **and** a resolved remote size. Those items take a dedicated fast path in the interceptor: no playback-policy resolution, no background-probe check, one inner call and return — so this path can neither run ffprobe nor hit the stream URL a second time.
 
-Every hit writes exactly one **Information** line to the server log, visible without enabling debug logging:
-
-```
-[INF] FastSTRM: 加速成功
-```
-
----
-
 ## Known trade-off
 
 - **A `.strm` item with no runtime is not marked as watched.** Jellyfin treats "no runtime" as "finished": it sets `Played = true` and resets the position. While the duration is unknown, the plugin therefore stores the reported position and skips the completion update, so resume keeps working instead of being wiped on every progress report.
