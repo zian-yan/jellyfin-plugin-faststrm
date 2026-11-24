@@ -139,15 +139,17 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             user?.Id,
             policy.Source);
 
-        // 远端大小与 inner 取源并行发起。原来这一跳串在取源之前，慢站会把这整段
-        // DNS + 握手 + HEAD 直接加到起播延迟上，而结果只用于填充下发源的 Size。
-        var sizeLookup = _remoteSize.EnsureRemoteSizeAsync(item, cancellationToken);
+        // 远端大小查询仍在取源的同时发起，但不再等待它：命中缓存或已补全的条目立刻下发真实大小，
+        // 未命中的本次只下发已知值，结果由 RemoteSizeService 在后台写回缓存与数据库，
+        // 由下一次取源带出。这样慢站与死链不再把 2 秒预算加在起播延迟上。
+        //
+        // 这里刻意不传请求的 cancellationToken：响应返回后 RequestAborted 可能被取消，
+        // 会把这次后台查询判成失败并进入 5 分钟冷却。查询本身仍有 2 秒上限与独立闸门。
+        var sizeLookup = _remoteSize.EnsureRemoteSizeAsync(item, CancellationToken.None);
 
         var sources = await _inner.GetPlaybackMediaSources(
             item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
             .ConfigureAwait(false);
-
-        await AwaitSizeLookupAsync(item, sizeLookup).ConfigureAwait(false);
 
         ApplyShortcutTarget(item, sources);
 
@@ -160,16 +162,19 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         WarnIfStreamInfoMissing(item, hasStreamInfo, sources, backgroundProbeDelaySeconds);
 
+        // 只下发此刻已知的大小：进程内缓存或库里可信的值；未知就保持原样。
         _remoteSize.ApplySizeToSources(item, sources);
+
+        _ = ForgetSizeLookupAsync(item, sizeLookup);
 
         return (sources, hasStreamInfo ? "skip-probe" : "instant-no-probe");
     }
 
     /// <summary>
-    /// 等待并行发起的大小查询。失败只影响下发的 Size，不能影响这次取源，
-    /// 因此这里把异常全部吃掉。
+    /// 大小查询已不再阻塞起播，这里只负责观察后台任务并吞掉异常：
+    /// 失败只影响下一次取源能否带上真实大小，不能变成未观察的任务异常。
     /// </summary>
-    private async Task AwaitSizeLookupAsync(BaseItem item, Task<long?> lookup)
+    private async Task ForgetSizeLookupAsync(BaseItem item, Task<long?> lookup)
     {
         try
         {
@@ -179,7 +184,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         {
             _logger.LogDebug(
                 ex,
-                "FastSTRM: The playback-time size lookup for {Name} failed",
+                "FastSTRM: The background size lookup for {Name} failed",
                 LogSafe.Name(item));
         }
     }
